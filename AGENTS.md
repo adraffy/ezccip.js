@@ -59,7 +59,7 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 - **`History`** only exists to build the log line: `name`, `show` (`readonly unknown[] | false`), `error`, `children`, `inner`. Don't add fields that aren't printed.
 - **Public exports** are listed explicitly in `src/index.ts`. Keep internal helpers (eg. `encodeErrorString`, `formatCoinType`, the ABI items) out of it; tests may import internal modules directly.
 - **ENSIP-10 answers** are built from typed ABI items in `src/ens/abi.ts` via `profile(abiItem, answer)`, so `args` and results are type-checked. Add new profiles the same way. EVM `addr()` values must be 20 bytes or empty (`toEVMAddress`).
-- **Object parameters**: `enableENSIP10({ resolve, ...options })`, `serveEZCCIP({ resolve, ... })`, and the signing functions take a single object.
+- **Object parameters**: `enableENSIP10({ resolve, ...options })` (returns the instance, for chaining) and the signing functions take a single object. `serveEZCCIP` takes an `EZCCIP` or a `resolve` function, then options; only the `resolve` form creates the instance, with a random signer unless one is given.
 - **Multicall** is only answered as the outer call; subcalls cannot be `multicall()`. Inside `resolve()`, `processENSIP10` allows one `multicall()` at the top of the inner data, and its subcalls cannot be `multicall()` either. There is no recursion limit option.
 - **Results**: a tuple is ABI-encoded with the function outputs, and `Hex`/`Uint8Array` is treated as already encoded. Returning nothing is only allowed (by type) for functions without outputs.
 - **Options are private**: `EZCCIP` copies its options at construction. Don't add a public `options` property; expose a getter if something is needed (eg. `signerAddress`, `protocol`).

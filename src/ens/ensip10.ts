@@ -1,7 +1,6 @@
 import type { AbiParametersToPrimitiveTypes } from "abitype";
 import {
 	type AbiFunction,
-	decodeAbiParameters,
 	encodeAbiParameters,
 	encodeErrorResult,
 	type Hex,
@@ -14,7 +13,7 @@ import type { CallContext } from "../context.js";
 import { CCIPReadError, encodeErrorString } from "../errors.js";
 import type { History } from "../history.js";
 import type { Awaitable, BytesLike, HandlerFunction } from "../types.js";
-import { bytesLikeToHex, getSelector, isBytesLike, isEmpty, stripSelector } from "../utils.js";
+import { bytesLikeToHex, decodeArgs, getSelector, isBytesLike, isEmpty } from "../utils.js";
 import {
 	ABI,
 	ADDR,
@@ -103,12 +102,7 @@ async function answer(
 			});
 		}
 		const { abiFunction, answer } = profile;
-		let args: readonly unknown[];
-		try {
-			args = decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
-		} catch (cause) {
-			throw new CCIPReadError("invalid calldata", { status: 400, cause });
-		}
+		const args = decodeArgs(abiFunction, calldata);
 		if (history) {
 			history.name = abiFunction.name;
 			history.show = args.slice(1); // drop namehash

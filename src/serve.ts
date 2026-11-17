@@ -5,9 +5,13 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ENSIP10Options, ENSIP10Parameters } from "./ens/ensip10.js";
+import { generatePrivateKey } from "viem/accounts";
+import type { GetRecord } from "./ens/ensip10.js";
 import { CCIPReadError } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
+
+/** Largest request body accepted, in bytes. */
+const MAX_BODY_SIZE = 1 << 20;
 
 export type ServeOptions = {
 	/** Port to listen on. (default: random open port) */
@@ -20,14 +24,6 @@ export type ServeOptions = {
 	cors?: boolean;
 };
 
-// every key of ENSIP10Options, checked by the compiler
-const ENSIP10_KEYS = Object.keys({
-	multicall: 0,
-	defaultAddress: 0,
-	throwUnsupported: 0,
-	unreachableAsEmpty: 0,
-} satisfies Record<keyof ENSIP10Options, 0>) as (keyof ENSIP10Options)[];
-
 export type EZCCIPServer = {
 	readonly ezccip: EZCCIP;
 	readonly server: Server;
@@ -38,17 +34,16 @@ export type EZCCIPServer = {
 	 * [TOR context](https://github.com/namestonehq/TheOffchainResolver.sol#context-format):
 	 * `"{signer} {endpoint}"`, or just the endpoint without a signer.
 	 */
-	readonly torContext: string;
+	readonly context: string;
 	/** Stops the server and closes open connections. Safe to call more than once. */
 	shutdown(): Promise<void>;
 	[Symbol.asyncDispose](): Promise<void>;
 };
 
-/** Serve an ENSIP-10 resolver: `resolve` plus its options, `EZCCIP` options, and server options. */
-export type ServeENSIP10Parameters = ENSIP10Parameters & EZCCIPOptions & ServeOptions;
-
 /**
- * Serve an {@link EZCCIP} instance, or an ENSIP-10 resolver, over HTTP.
+ * Serve an {@link EZCCIP} instance over HTTP, or an ENSIP-10 `resolve` function:
+ * `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`,
+ * signed with a random key unless `signer` is set.
  *
  * @example
  * ```ts
@@ -58,31 +53,20 @@ export type ServeENSIP10Parameters = ENSIP10Parameters & EZCCIPOptions & ServeOp
  * await ccip.shutdown();
  *
  * // minimal: fixed text() for any name
- * await using ccip = await serveEZCCIP({ resolve: () => ({ text: () => "Raffy" }), signer: privateKey });
+ * await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
  * ```
  */
 export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;
-export function serveEZCCIP(parameters: ServeENSIP10Parameters): Promise<EZCCIPServer>;
+export function serveEZCCIP(resolve: GetRecord, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
 export async function serveEZCCIP(
-	arg: EZCCIP | ServeENSIP10Parameters,
-	serveOptions: ServeOptions = {},
+	arg: EZCCIP | GetRecord,
+	options: ServeOptions & EZCCIPOptions = {},
 ): Promise<EZCCIPServer> {
-	let ezccip: EZCCIP;
-	if (arg instanceof EZCCIP) {
-		ezccip = arg;
-	} else {
-		const { port, hostname, log, cors, resolve, ...rest } = arg;
-		const ensip10: ENSIP10Options = {};
-		const options: Record<string, unknown> = { ...rest };
-		for (const key of ENSIP10_KEYS) {
-			(ensip10 as Record<string, unknown>)[key] = options[key];
-			delete options[key];
-		}
-		ezccip = new EZCCIP(options as EZCCIPOptions);
-		ezccip.enableENSIP10({ resolve, ...ensip10 });
-		serveOptions = { port, hostname, log, cors };
-	}
-	const { port = 0, hostname, log = true, cors = true } = serveOptions;
+	const ezccip =
+		arg instanceof EZCCIP
+			? arg
+			: new EZCCIP({ ...options, signer: options.signer ?? generatePrivateKey() }).enableENSIP10({ resolve: arg });
+	const { port = 0, hostname, log = true, cors = true } = options;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 
 	const server = createServer(async (req, res) => {
@@ -105,9 +89,9 @@ export async function serveEZCCIP(
 			});
 			await sendResponse(res, response);
 		} catch (error) {
-			// aborted or malformed request
+			// aborted, malformed, or oversized request
 			print?.(ip, req.method, req.url, error);
-			if (!res.headersSent) res.statusCode = 400;
+			if (!res.headersSent) res.statusCode = error instanceof CCIPReadError ? error.status : 400;
 			res.end();
 		}
 	});
@@ -118,14 +102,15 @@ export async function serveEZCCIP(
 			resolve();
 		});
 	});
+	server.on("error", (error) => print?.("Server error", error)); // an unhandled "error" would crash the process
 
 	const t0 = Date.now();
 	const address = server.address() as AddressInfo;
 	const host = !hostname || hostname === "0.0.0.0" || hostname === "::" ? "localhost" : hostname;
 	const endpoint = `http://${host.includes(":") ? `[${host}]` : host}:${address.port}`;
 	const signer = ezccip.signerAddress;
-	const torContext = signer ? `${signer} ${endpoint}` : endpoint;
-	print?.(`Serving "${ezccip.protocol}" ${torContext}`);
+	const context = signer ? `${signer} ${endpoint}` : endpoint;
+	print?.(`Serving "${ezccip.protocol}" ${context}`);
 
 	let stopping: Promise<void> | undefined;
 	const shutdown = () => {
@@ -143,7 +128,7 @@ export async function serveEZCCIP(
 		server,
 		port: address.port,
 		endpoint,
-		torContext,
+		context,
 		shutdown,
 		[Symbol.asyncDispose]: shutdown,
 	};
@@ -162,8 +147,15 @@ async function toRequest(req: IncomingMessage): Promise<Request> {
 	}
 	let body: Uint8Array<ArrayBuffer> | undefined;
 	if (req.method !== "GET" && req.method !== "HEAD") {
+		const tooLarge = new CCIPReadError("request too large", { status: 413 });
+		if (Number(req.headers["content-length"]) > MAX_BODY_SIZE) throw tooLarge;
 		const chunks: Uint8Array[] = [];
-		for await (const chunk of req) chunks.push(chunk);
+		let size = 0;
+		for await (const chunk of req as AsyncIterable<Uint8Array>) {
+			size += chunk.length;
+			if (size > MAX_BODY_SIZE) throw tooLarge;
+			chunks.push(chunk);
+		}
 		body = new Uint8Array(Buffer.concat(chunks));
 	}
 	return new Request(url, { method: req.method, headers, body });

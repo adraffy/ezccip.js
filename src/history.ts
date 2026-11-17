@@ -38,7 +38,7 @@ export class History {
 		const args = show ? show.map((x) => (typeof x === "string" ? asciiize(x) : String(x))) : [];
 		let desc = `${name}(${args.join(",")})`;
 		if (children.length) desc += `^${children.length} [${children.join(" ")}]`;
-		if (error !== undefined) desc += `<${error instanceof Error ? error.message : String(error)}>`;
+		if (error !== undefined) desc += `<${asciiize(error instanceof Error ? error.message : String(error))}>`;
 		if (inner) desc += `.${inner}`;
 		return desc;
 	}

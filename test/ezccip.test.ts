@@ -329,6 +329,18 @@ describe("multicall", () => {
 	});
 });
 
+test("unknown protocol is rejected early", () => {
+	expect(() => new EZCCIP({ protocol: "nope" as never })).toThrow("unknown protocol");
+	const ezccip = new EZCCIP();
+	ezccip.addHandler("f()", (_, ctx) => {
+		ctx.protocol = "nope" as never;
+	});
+	expect(
+		ezccip.handleRead({ sender: "0x0000000000000000000000000000000000000001", data: "0x26121ff0" }),
+	).rejects.toThrow("unknown protocol");
+	expect(new EZCCIP().enableENSIP10({ resolve: () => undefined })).toBeInstanceOf(EZCCIP);
+});
+
 describe("enableENSIP10", () => {
 	const text = parseAbiItem("function text(bytes32, string) returns (string)");
 	const inner = encode(text, [pad("0x"), "name"]);

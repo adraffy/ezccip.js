@@ -1,7 +1,6 @@
 import {
 	type AbiFunction,
 	type Address,
-	decodeAbiParameters,
 	encodeAbiParameters,
 	getAddress,
 	type Hex,
@@ -24,9 +23,9 @@ import {
 	parseCCIPReadRequest,
 	type RequestHooks,
 } from "./http.js";
-import { type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
+import { checkProtocol, type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
 import type { BytesLike, ExtraParameter, Handler, HandlerFunction, ResponseOptions } from "./types.js";
-import { bytesLikeToHex, checkTTL, getSelector, stripSelector } from "./utils.js";
+import { bytesLikeToHex, checkOrigin, checkTTL, decodeArgs, getSelector } from "./utils.js";
 
 export type EZCCIPOptions = RequestHooks &
 	ResponseOptions & {
@@ -89,11 +88,10 @@ export class EZCCIP<extra = undefined> {
 	readonly #handlers = new Map<Hex, Handler<any, extra>>();
 
 	constructor({ signer, protocol, ttl = 60, origin, parseOrigin, onResponse, onError }: EZCCIPOptions = {}) {
-		if (origin !== undefined && !isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
 		this.#signer = signer ? toSigner(signer) : undefined;
-		this.#protocol = protocol;
+		this.#protocol = protocol && checkProtocol(protocol);
 		this.#ttl = checkTTL(ttl);
-		this.#origin = origin && getAddress(origin);
+		this.#origin = origin === undefined ? undefined : checkOrigin(origin);
 		this.#parseOrigin = parseOrigin ?? ((url) => originFromPath(url.pathname));
 		this.#hooks = { onResponse, onError };
 	}
@@ -139,14 +137,10 @@ export class EZCCIP<extra = undefined> {
 			) as AbiFunction;
 		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
-		if (toFunctionSelector(abiFunction) === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
-		const handler = {
-			abiFunction,
-			selector: toFunctionSelector(abiFunction),
-			signature: toFunctionSignature(abiFunction),
-			fn,
-		};
-		this.#handlers.set(handler.selector, handler);
+		const selector = toFunctionSelector(abiFunction);
+		if (selector === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
+		const handler = { abiFunction, selector, signature: toFunctionSignature(abiFunction), fn };
+		this.#handlers.set(selector, handler);
 		return handler;
 	}
 
@@ -165,9 +159,12 @@ export class EZCCIP<extra = undefined> {
 	 * ```ts
 	 * ezccip.enableENSIP10({ resolve: (name, ctx) => db.getRecord(name) });
 	 * ```
+	 *
+	 * @returns this instance, for chaining.
 	 */
-	enableENSIP10(parameters: ENSIP10Parameters<extra>) {
-		return this.addHandler(RESOLVE, createENSIP10Handler(parameters));
+	enableENSIP10(parameters: ENSIP10Parameters<extra>): this {
+		this.addHandler(RESOLVE, createENSIP10Handler(parameters));
+		return this;
 	}
 
 	/**
@@ -195,7 +192,7 @@ export class EZCCIP<extra = undefined> {
 			sender: getAddress(sender),
 			request: parameters.request,
 			origin: getAddress(origin),
-			protocol: parameters.protocol ?? this.#protocol,
+			protocol: parameters.protocol ? checkProtocol(parameters.protocol) : this.#protocol,
 			signer: parameters.signer ? toSigner(parameters.signer) : this.#signer,
 			ttl: parameters.ttl === undefined ? this.#ttl : checkTTL(parameters.ttl),
 		};
@@ -224,14 +221,14 @@ export class EZCCIP<extra = undefined> {
 			if (selector === MULTICALL_SELECTOR && !isSubcall) {
 				history.name = MULTICALL.name;
 				history.show = false;
-				const [calls] = decode(MULTICALL, calldata) as readonly [readonly Hex[]];
+				const [calls] = decodeArgs(MULTICALL, calldata) as readonly [readonly Hex[]];
 				const results = calls.map((call) => this.#call(ctx.child(call), extra, true).catch(encodeErrorString));
 				return encodeAbiParameters(MULTICALL.outputs, [await Promise.all(results)]);
 			}
 			const handler = this.#handlers.get(selector);
 			if (!handler) throw new CCIPReadError(`unsupported function: ${selector}`, { status: 404 });
 			history.name = handler.abiFunction.name;
-			const args = decode(handler.abiFunction, calldata);
+			const args = decodeArgs(handler.abiFunction, calldata);
 			history.show = args;
 			const result = await handler.fn(args as never, ctx, extra);
 			if (!result) return "0x"; // returns ()
@@ -292,15 +289,5 @@ export class EZCCIP<extra = undefined> {
 	 * export default { fetch: ezccip.fetch };
 	 * ```
 	 */
-	readonly fetch: FetchHandler<extra> = ((request: Request) =>
-		(this.handleRequest as unknown as (request: Request) => Promise<Response>)(request)) as FetchHandler<extra>;
-}
-
-/** Decodes the arguments of calldata. */
-function decode(abiFunction: AbiFunction, calldata: Hex): readonly unknown[] {
-	try {
-		return decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
-	} catch (cause) {
-		throw new CCIPReadError("invalid calldata", { status: 400, cause });
-	}
+	readonly fetch = ((request: Request) => this.handleRequest(request, {} as never)) as FetchHandler<extra>;
 }

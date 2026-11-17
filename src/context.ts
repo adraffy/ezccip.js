@@ -1,7 +1,7 @@
-import { type Address, getAddress, type Hex, isAddress } from "viem";
+import type { Address, Hex } from "viem";
 import { History } from "./history.js";
-import { type Protocol, type Signer, type SignerLike, toSigner } from "./signing.js";
-import { checkTTL } from "./utils.js";
+import { checkProtocol, type Protocol, type Signer, type SignerLike, toSigner } from "./signing.js";
+import { checkOrigin, checkTTL } from "./utils.js";
 
 /**
  * Passed to every handler. One per call: the outer call, each `multicall()` subcall, and so on.
@@ -74,14 +74,13 @@ export class Context implements CallContext {
 		return this.#state.origin;
 	}
 	set origin(origin: Address) {
-		if (!isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
-		this.#state.origin = getAddress(origin);
+		this.#state.origin = checkOrigin(origin);
 	}
 	get protocol(): Protocol {
 		return this.#state.protocol ?? defaultProtocol(this.#state.signer);
 	}
 	set protocol(protocol: Protocol) {
-		this.#state.protocol = protocol;
+		this.#state.protocol = checkProtocol(protocol);
 	}
 	get signer(): Signer | undefined {
 		return this.#state.signer;

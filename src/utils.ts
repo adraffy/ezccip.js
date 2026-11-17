@@ -1,4 +1,14 @@
-import { bytesToHex, type Hex, isHex } from "viem";
+import {
+	type AbiFunction,
+	type Address,
+	bytesToHex,
+	decodeAbiParameters,
+	getAddress,
+	type Hex,
+	isAddress,
+	isHex,
+} from "viem";
+import { CCIPReadError } from "./errors.js";
 import type { BytesLike } from "./types.js";
 
 /** Converts bytes-like to lowercase hex. Throws on strings that aren't hex. */
@@ -25,6 +35,21 @@ export function getSelector(calldata: Hex): Hex {
 /** Returns calldata without its selector. */
 export function stripSelector(calldata: Hex): Hex {
 	return `0x${calldata.slice(10)}`;
+}
+
+/** Decodes the arguments of calldata. Throws a 400 {@link CCIPReadError} if they don't match the function. */
+export function decodeArgs(abiFunction: AbiFunction, calldata: Hex): readonly unknown[] {
+	try {
+		return decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
+	} catch (cause) {
+		throw new CCIPReadError("invalid calldata", { status: 400, cause });
+	}
+}
+
+/** Validates and checksums an origin address. */
+export function checkOrigin(origin: string): Address {
+	if (!isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
+	return getAddress(origin);
 }
 
 /** Validates a response lifetime: a finite, non-negative number of seconds. */

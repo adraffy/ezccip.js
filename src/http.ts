@@ -77,13 +77,10 @@ export function originFromPath(path: string): Address | undefined {
 	return match ? getAddress(match[1]!) : undefined;
 }
 
-/** Calls an observer, ignoring exceptions and rejections. */
-export function callHook<T>(hook: ((event: T) => unknown) | undefined, event: T): void {
+/** Calls an observer without waiting for it, ignoring exceptions and rejections. Never rejects. */
+export async function callHook<T>(hook: ((event: T) => unknown) | undefined, event: T): Promise<void> {
 	try {
-		const result = hook?.(event);
-		if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function") {
-			(result as PromiseLike<unknown>).then(undefined, () => {});
-		}
+		await hook?.(event);
 	} catch {
 		// observers can't break a response
 	}

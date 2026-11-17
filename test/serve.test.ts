@@ -33,7 +33,7 @@ describe("serveEZCCIP", () => {
 		});
 		const ccip = await serveEZCCIP(make());
 		expect(ccip.endpoint).toBe(`http://localhost:${ccip.port}`);
-		expect(ccip.torContext).toBe(ccip.endpoint);
+		expect(ccip.context).toBe(ccip.endpoint);
 
 		const res = await post(ccip.endpoint, encodeFunctionData({ abi: [f], args: [1n] }));
 		const { data } = (await res.json()) as { data: Hex };
@@ -80,13 +80,11 @@ describe("serveEZCCIP", () => {
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
 	});
 
-	test("ENSIP-10 options are passed through", async () => {
-		await using ccip = await serveEZCCIP({
-			resolve: () => undefined,
-			unreachableAsEmpty: true,
-			cors: false,
-			log: false,
-		});
+	test("chained enableENSIP10 with options", async () => {
+		await using ccip = await serveEZCCIP(
+			new EZCCIP().enableENSIP10({ resolve: () => undefined, unreachableAsEmpty: true }),
+			{ cors: false, log: false },
+		);
 		const text = parseAbiItem("function text(bytes32, string) returns (string)");
 		const resolve = parseAbiItem("function resolve(bytes, bytes) returns (bytes)");
 		const data = encodeFunctionData({
@@ -99,18 +97,26 @@ describe("serveEZCCIP", () => {
 		expect(decodeFunctionResult({ abi: [text], data: answer })).toBe(""); // not UnreachableName
 	});
 
-	test("record function + signer", async () => {
+	test("resolve function: default signer", async () => {
+		await using a = await serveEZCCIP(() => ({ text: () => "Raffy" }), { log: false });
+		await using b = await serveEZCCIP(() => undefined, { log: false, signer: undefined });
+		expect(a.ezccip.signerAddress).toBeDefined();
+		expect(a.ezccip.signerAddress).not.toBe(b.ezccip.signerAddress); // random per server
+		expect(a.ezccip.protocol).toBe("ens");
+		expect(a.context).toBe(`${a.ezccip.signerAddress} ${a.endpoint}`);
+		expect(a.ezccip.findHandler("resolve")).toBeDefined();
+	});
+
+	test("resolve function + signer", async () => {
 		const privateKey = generatePrivateKey();
 		const { address } = privateKeyToAccount(privateKey);
-		await using ccip = await serveEZCCIP({
-			resolve: () => ({ text: () => "Raffy" }),
-			unreachableAsEmpty: true,
+		await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), {
 			signer: privateKey,
 			protocol: "tor",
 			log: false,
 		});
 		expect(ccip.ezccip.signerAddress).toBe(address);
-		expect(ccip.torContext).toBe(`${address} ${ccip.endpoint}`);
+		expect(ccip.context).toBe(`${address} ${ccip.endpoint}`);
 		expect(ccip.ezccip.protocol).toBe("tor");
 		expect(ccip.ezccip.findHandler("resolve")).toBeDefined();
 	});
@@ -138,6 +144,12 @@ describe("serveEZCCIP", () => {
 		await ccip.shutdown();
 		expect(ccip.server.listening).toBe(false);
 		expect(fetch(ccip.endpoint)).rejects.toThrow();
+	});
+
+	test("request too large", async () => {
+		await using ccip = await serveEZCCIP(make(), { log: false });
+		const res = await fetch(ccip.endpoint, { method: "POST", body: "x".repeat((1 << 20) + 1) });
+		expect(res.status).toBe(413);
 	});
 
 	test("port in use", async () => {

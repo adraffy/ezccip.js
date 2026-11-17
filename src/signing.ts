@@ -24,6 +24,18 @@ export type SignedProtocol = "ens" | "tor";
  */
 export type Protocol = "raw" | SignedProtocol;
 
+/** Validates a protocol name. */
+export function checkProtocol(protocol: Protocol): Protocol {
+	switch (protocol) {
+		case "raw":
+		case "ens":
+		case "tor":
+			return protocol;
+		default:
+			throw new TypeError(`unknown protocol: ${protocol satisfies never}`);
+	}
+}
+
 /** Signs raw 32-byte hashes, eg. a viem `LocalAccount`. */
 export type Signer = Pick<LocalAccount, "address"> & Required<Pick<LocalAccount, "sign">>;
 
@@ -118,7 +130,7 @@ export async function verifyResponse({
 	const [result, signature] = protocol === "tor" ? [b, a] : [a, b];
 	const hash = getResponseHash({ protocol, origin, expires, calldata, result });
 	const signer = await recoverAddress({ hash, signature });
-	if (expires <= BigInt(now)) throw new Error(`response expired at ${expires}`);
+	if (expires < BigInt(now)) throw new Error(`response expired at ${expires}`);
 	if (expected && !isAddressEqual(signer, expected)) throw new Error(`unexpected signer: ${signer}`);
 	return { result, expires, signer };
 }

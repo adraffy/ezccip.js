@@ -95,7 +95,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### serveEZCCIP()
 
-Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 resolver given as one object of `resolve`, ENSIP-10 options, `EZCCIP` options, and server options. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable, and `cors: false` to turn off CORS headers.
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 `resolve` function: `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`, signed with a random key unless `signer` is set. Request bodies over 1 MiB are rejected. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable, and `cors: false` to turn off CORS headers.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";
@@ -104,12 +104,15 @@ const ccip = await serveEZCCIP(ezccip, { port: 8016 }); // default: random port
 // 2026-01-01T00:00:00.000Z Serving "tor" 0xd00d726b2aD6C81E894DC6B87BE6Ce9c5572D2cd http://localhost:8016
 // 2026-01-01T00:00:01.000Z ::1 / resolve(raffy.eth).text(name)
 ccip.endpoint; // "http://localhost:8016"
-ccip.torContext; // "{signer} {endpoint}"
+ccip.context; // "{signer} {endpoint}"
 await ccip.shutdown();
 // 2026-01-01T00:00:02.000Z Shutdown<2000ms>
 
 // minimal example: fixed text() for any name
-await using ccip = await serveEZCCIP({ resolve: () => ({ text: () => "Raffy" }), signer: privateKey });
+await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
+
+// with ENSIP-10 options: enableENSIP10() returns the instance
+await serveEZCCIP(new EZCCIP({ signer: privateKey }).enableENSIP10({ resolve, unreachableAsEmpty: true }));
 ```
 
 ### Serving with fetch
@@ -214,7 +217,7 @@ bun run smoke  # build, then run dist/ on Node
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
-- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP({ resolve, ...options })` (no default signing key; `server` is still a `node:http` server; `signer`/`context` &rarr; `ezccip.signerAddress`/`torContext`); or use `ezccip.fetch` with any server
+- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`); or use `ezccip.fetch` with any server
 - `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, extra) => ...)`
 - handlers receive `(args, ctx, extra)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
 - extra context keys &rarr; one custom object, passed to handlers as the third argument: `(args, ctx, extra)`

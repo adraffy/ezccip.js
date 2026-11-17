@@ -136,6 +136,13 @@ describe("verifyResponse", () => {
 			"expired",
 		);
 	});
+	test("valid through its last second, like the onchain verifiers", async () => {
+		const { data: response } = await make({ signer: privateKey }).handleRead({ sender, data: request });
+		const { expires } = await verifyResponse({ protocol: "ens", response, calldata: request, origin: sender });
+		const p = { protocol: "ens", response, calldata: request, origin: sender } as const;
+		expect((await verifyResponse({ ...p, now: expires })).expires).toBe(expires);
+		expect(verifyResponse({ ...p, now: expires + 1n })).rejects.toThrow("expired");
+	});
 	test("expected signer", async () => {
 		const { data: response } = await make({ signer: privateKey }).handleRead({ sender, data: request });
 		const verify = (signer: `0x${string}`) =>
