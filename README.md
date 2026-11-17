@@ -17,13 +17,10 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
   - `multicall([resolve(name, ...), ...])`
   - `multicall([resolve(name, multicall([...])), ...])`
 - `serveEZCCIP()` to quickly launch a server (Bun)
-- [**CCIP Postman**](https://namestonehq.github.io/ezccip.js/test/postman.html) ⭐️
-  - directly debug any CCIP-Read server (no RPC)
 
 ## Demo
 
-1. `bun run start` &mdash; starts a [**TOR**](https://github.com/namestonehq/TheOffchainResolver.sol#context-format) CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
-1. check [Postman](https://namestonehq.github.io/ezccip.js/test/postman.html) &larr; change endpoint to `http://localhost:8016`
+`bun run start` starts a [**TOR**](https://github.com/namestonehq/TheOffchainResolver.sol#context-format) CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
 
 ## Usage
 

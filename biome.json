@@ -1,7 +1,7 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-	"files": { "includes": ["**", "!test/postman.html", "!**/*.md"] },
+	"files": { "includes": ["**", "!**/*.md"] },
 	"formatter": { "indentStyle": "tab", "lineWidth": 120 },
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"linter": {

@@ -24,7 +24,6 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 - **TypeScript 7** (`tsc` is the native compiler), `strict` + `noUncheckedIndexedAccess`.
 - **ESM-only**. No CommonJS build.
 - **Biome** for formatting and lint: tabs, double quotes, 120 columns. Do not hand-format; run `bun run format`.
-- `test/postman.html` is a standalone browser tool on its own stack (ethers from CDN). Leave it alone unless asked.
 
 ## Layout
 
