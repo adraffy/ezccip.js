@@ -4,7 +4,7 @@ import type { EZCCIP, HandleReadParameters, HandleReadReturnType } from "./ezcci
 import type { ExtraParameter } from "./types.js";
 
 /** Passed to {@link RequestHooks.onResponse} after a successful response. */
-export type RequestSuccessEvent<extra extends object = {}> = HandleReadReturnType<extra> & {
+export type RequestSuccessEvent<extra = undefined> = HandleReadReturnType<extra> & {
 	request: Request;
 	url: URL;
 };
@@ -19,12 +19,12 @@ export type RequestErrorEvent = {
 };
 
 /** Observers for HTTP requests, eg. for logging or metrics. Exceptions thrown by hooks are ignored. */
-export type RequestHooks<extra extends object = {}> = {
+export type RequestHooks<extra = undefined> = {
 	onResponse?: ((event: RequestSuccessEvent<extra>) => void) | undefined;
 	onError?: ((event: RequestErrorEvent) => void) | undefined;
 };
 
-export type HandleRequestOptions<extra extends object = {}> = RequestHooks<extra> & ExtraParameter<extra>;
+export type HandleRequestOptions<extra = undefined> = RequestHooks<extra> & ExtraParameter<extra>;
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request parsed from HTTP. */
 export type CCIPReadRequest = {
@@ -81,7 +81,7 @@ export function originFromPath(path: string): Address | undefined {
  * Responds with `{data}`, or `{message}` and an HTTP status on error. CORS is enabled.
  * The origin is taken from the path, then `parseOrigin()`, then the `origin` option.
  */
-export async function handleRequest<extra extends object>(
+export async function handleRequest<extra>(
 	ezccip: EZCCIP<extra>,
 	request: Request,
 	options?: HandleRequestOptions<extra>,

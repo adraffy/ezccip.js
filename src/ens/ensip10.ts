@@ -7,9 +7,10 @@ import {
 	toFunctionSelector,
 	toFunctionSignature,
 } from "viem";
+import type { CallContext } from "../context.js";
 import { CCIPReadError, encodeErrorString } from "../errors.js";
 import type { History } from "../history.js";
-import type { Awaitable, BytesLike, CallContext, FunctionHandler } from "../types.js";
+import type { Awaitable, BytesLike, HandlerFunction } from "../types.js";
 import { bytesLikeToHex, getSelector, isBytesLike, stripSelector } from "../utils.js";
 import { type RESOLVE, RESOLVE_ABI, UNREACHABLE_NAME, UNSUPPORTED_RESOLVER_PROFILE } from "./abi.js";
 import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, chainFromCoinType, formatCoinType } from "./coin-type.js";
@@ -32,11 +33,11 @@ export interface ENSRecord {
 	/** [EIP-619](https://github.com/ethereum/EIPs/pull/619): `{x, y}` or already ABI-encoded */
 	pubkey?(): Maybe<{ x: bigint | number; y: bigint | number } | BytesLike>;
 	/** [ENSIP-4](https://docs.ens.domains/ensip/4): `{type, data}` or already ABI-encoded */
-	ABI?(contentTypes: number): Maybe<{ type: bigint | number; data: BytesLike } | BytesLike>;
+	ABI?(contentTypes: bigint): Maybe<{ type: bigint; data: BytesLike } | BytesLike>;
 }
 
 export type ProcessENSIP10Options = {
-	/** Allow `multicall()` inside `resolve()`. (default: true) */
+	/** Allow `resolve(name, multicall([...]))`. Subcalls cannot be `multicall()`. (default: true) */
 	multicall?: boolean;
 	/** Fall back to the [ENSIP-19](https://docs.ens.domains/ensip/19) default address for EVM coin types. (default: true) */
 	defaultAddress?: boolean;
@@ -55,12 +56,21 @@ export async function processENSIP10(
 	calldata: Hex,
 	options: ProcessENSIP10Options = {},
 ): Promise<Hex> {
+	return process(record, calldata, options, false);
+}
+
+async function process(
+	record: ENSRecord | null | undefined,
+	calldata: Hex,
+	options: ProcessENSIP10Options,
+	isSubcall: boolean,
+): Promise<Hex> {
 	const { history } = options;
 	try {
 		if (history) history.calldata = calldata;
 		const selector = getSelector(calldata);
 		const profile = PROFILES.get(selector);
-		if (!profile || (options.multicall === false && profile.abiFunction.name === "multicall")) {
+		if (!profile || (profile.abiFunction.name === "multicall" && (isSubcall || options.multicall === false))) {
 			if (options.throwErrors) {
 				throw new CCIPReadError(`unsupported resolver profile: ${selector}`, { status: 400 });
 			}
@@ -99,7 +109,7 @@ const ANSWERS: Record<string, Answer> = {
 		return [
 			await Promise.all(
 				(calls as Hex[]).map((call) =>
-					processENSIP10(record, call, { ...options, history: history?.enter() }).catch(encodeErrorString),
+					process(record, call, { ...options, history: history?.addChild() }, true).catch(encodeErrorString),
 				),
 			),
 		];
@@ -144,9 +154,8 @@ const ANSWERS: Record<string, Answer> = {
 		return value ? [value.x, value.y] : [0n, 0n];
 	},
 	async "ABI(bytes32,uint256)"(record, [, contentTypes], { history }) {
-		const types = Number(contentTypes);
-		if (history) history.show = [formatABITypes(types)];
-		const value = await record?.ABI?.(types);
+		if (history) history.show = [formatContentTypes(contentTypes)];
+		const value = await record?.ABI?.(contentTypes);
 		if (isBytesLike(value)) return value;
 		return value ? [value.type, bytesLikeToHex(value.data)] : [0n, "0x"];
 	},
@@ -165,21 +174,17 @@ const PROFILES = new Map(
 	}),
 );
 
-function formatABITypes(types: number) {
+function formatContentTypes(contentTypes: bigint) {
 	const v: string[] = [];
-	if (types & 1) v.push("JSON");
-	if (types & 2) v.push("zip(JSON)");
-	if (types & 4) v.push("CBOR");
-	if (types & 8) v.push("URI");
+	if (contentTypes & 1n) v.push("JSON");
+	if (contentTypes & 2n) v.push("zip(JSON)");
+	if (contentTypes & 4n) v.push("CBOR");
+	if (contentTypes & 8n) v.push("URI");
 	return v.join("|");
 }
 
 /** Looks up the record for a name. Return nothing if the name does not exist. */
-export type GetRecord<extra extends object = {}> = (
-	name: string,
-	context: CallContext<extra>,
-	history: History,
-) => Maybe<ENSRecord>;
+export type GetRecord<extra = undefined> = (name: string, ctx: CallContext<extra>) => Maybe<ENSRecord>;
 
 export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
 	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
@@ -190,20 +195,19 @@ export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
  * Creates a handler for [ENSIP-10](https://docs.ens.domains/ensip/10) `resolve(bytes name, bytes data)`.
  * Note: the name is not normalized.
  */
-export function createENSIP10Handler<extra extends object = {}>(
+export function createENSIP10Handler<extra = undefined>(
 	getRecord: GetRecord<extra>,
 	{ unreachableAsEmpty, ...options }: ENSIP10Options = {},
-): FunctionHandler<typeof RESOLVE, extra> {
-	return async ([dnsname, data], context, history) => {
+): HandlerFunction<typeof RESOLVE, extra> {
+	return async ([dnsname, data], ctx) => {
 		const name = dnsDecode(dnsname).join(".");
-		history.show = [name];
-		const record = await getRecord(name, context, history);
+		ctx.history.show = [name];
+		const record = await getRecord(name, ctx);
 		if (!record && !unreachableAsEmpty) {
-			history.error = "UnreachableName";
+			ctx.history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}
-		if (record) history.record = record;
 		// already encoded since: abi.decode(abi.encode(x)) == x
-		return processENSIP10(record, data, { ...options, history: history.chain() });
+		return processENSIP10(record, data, { ...options, history: ctx.history.addInner() });
 	};
 }

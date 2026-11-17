@@ -16,8 +16,8 @@ describe("serveEZCCIP", () => {
 	test("instance + logging", async () => {
 		const lines: string[] = [];
 		const ezccip = new EZCCIP();
-		ezccip.register(f, ([x]) => [x + 1n]);
-		ezccip.register(fail, () => {
+		ezccip.addHandler(f, ([x]) => [x + 1n]);
+		ezccip.addHandler(fail, () => {
 			throw new Error("chonk");
 		});
 		const ccip = serveEZCCIP(ezccip, { log: (...a) => lines.push(a.map(String).join(" ")) });
@@ -49,12 +49,12 @@ describe("serveEZCCIP", () => {
 		expect(ccip.signer).toBe(address);
 		expect(ccip.context).toBe(`${address} ${ccip.endpoint}`);
 		expect(ccip.ezccip.protocol).toBe("tor");
-		expect(ccip.ezccip.getFunction("resolve")).toBeDefined();
+		expect(ccip.ezccip.findHandler("resolve")).toBeDefined();
 	});
 
 	test("verify over http", async () => {
 		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
-		ezccip.register(f, ([x]) => [x]);
+		ezccip.addHandler(f, ([x]) => [x]);
 		await using ccip = serveEZCCIP(ezccip, { log: false });
 		const request = encodeFunctionData({ abi: [f], args: [7n] });
 		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex };

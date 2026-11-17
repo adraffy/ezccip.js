@@ -23,8 +23,8 @@ const FAIL = toFunctionSelector(fail);
 
 function make(options?: EZCCIPOptions) {
 	const ezccip = new EZCCIP(options);
-	ezccip.register(getOrigin, (_, context) => [context.origin]);
-	ezccip.register(fail, () => {
+	ezccip.addHandler(getOrigin, (_, ctx) => [ctx.origin]);
+	ezccip.addHandler(fail, () => {
 		throw new Error("chonk");
 	});
 	return ezccip;
@@ -119,7 +119,7 @@ describe("hooks", () => {
 	test("instance", async () => {
 		const events: string[] = [];
 		const ezccip = make({
-			onResponse: ({ url, history, data }) => events.push(`ok ${url.pathname} ${history} ${data.length}`),
+			onResponse: ({ url, context, data }) => events.push(`ok ${url.pathname} ${context.history} ${data.length}`),
 			onError: ({ status, error }) => events.push(`error ${status} ${(error as Error).message}`),
 		});
 		await post(ezccip, `/${ORIGIN}`);
@@ -149,7 +149,7 @@ describe("hooks", () => {
 
 test("extra context", async () => {
 	const ezccip = new EZCCIP<{ env: { name: string } }>();
-	const fn = ezccip.register("function f() returns (string)", (_, context) => [context.env.name]);
+	const fn = ezccip.addHandler("function f() returns (string)", (_, ctx) => [ctx.extra.env.name]);
 	const request = new Request("http://localhost/", {
 		method: "POST",
 		body: JSON.stringify({ sender: SENDER, data: fn.selector }),
@@ -161,7 +161,7 @@ test("extra context", async () => {
 
 describe("Bun.serve + viem ccipRequest", () => {
 	const ezccip = new EZCCIP();
-	ezccip.enableENSIP10((name, context) => ({ text: (key) => `${name}:${key}:${context.origin}` }));
+	ezccip.enableENSIP10((name, ctx) => ({ text: (key) => `${name}:${key}:${ctx.origin}` }));
 	const server = Bun.serve({ port: 0, fetch: ezccip.fetch });
 	afterAll(() => server.stop(true));
 

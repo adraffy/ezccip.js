@@ -12,31 +12,30 @@ import {
 	toFunctionSelector,
 	toFunctionSignature,
 } from "viem";
+import { CallContext } from "./context.js";
 import { MULTICALL, RESOLVE } from "./ens/abi.js";
 import { createENSIP10Handler, type ENSIP10Options, type GetRecord } from "./ens/ensip10.js";
 import { CCIPReadError, encodeErrorString } from "./errors.js";
 import { History } from "./history.js";
 import { type HandleRequestOptions, handleRequest, type RequestHooks } from "./http.js";
 import { type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
-import type { BytesLike, CallContext, ExtraParameter, FunctionHandler, RegisteredFunction } from "./types.js";
+import type { BytesLike, ExtraParameter, Handler, HandlerFunction } from "./types.js";
 import { bytesLikeToHex, getSelector, stripSelector } from "./utils.js";
 
-export type EZCCIPOptions<extra extends object = {}> = RequestHooks<extra> & {
+export type EZCCIPOptions<extra = undefined> = RequestHooks<extra> & {
 	/** Default signer: a private key or eg. a viem `LocalAccount`. */
 	signer?: SignerLike | undefined;
 	/** Default protocol. (default: `"ens"` with a signer, otherwise `"raw"`) */
 	protocol?: Protocol | undefined;
 	/** Default response lifetime in seconds. (default: 60) */
 	ttl?: number | undefined;
-	/** Maximum `multicall()` nesting. `0` disables multicall. (default: 2) */
-	recursionLimit?: number | undefined;
 	/** Fallback origin for HTTP requests. */
 	origin?: Address | undefined;
 	/** Extracts the origin from the URL of an HTTP request, if the path has none. */
 	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
 };
 
-export type HandleReadParameters<extra extends object = {}> = ExtraParameter<extra> & {
+export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> & {
 	sender: Hex;
 	/** Calldata from `OffchainLookup`. */
 	data: Hex;
@@ -47,10 +46,10 @@ export type HandleReadParameters<extra extends object = {}> = ExtraParameter<ext
 	request?: Request | undefined;
 };
 
-export type HandleReadReturnType<extra extends object = {}> = {
+export type HandleReadReturnType<extra = undefined> = {
 	/** ABI-encoded response for EIP-3668. */
 	data: Hex;
-	history: History;
+	/** Context of the outer call. Its `history` describes the whole response. */
 	context: CallContext<extra>;
 };
 
@@ -65,27 +64,30 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
  *
+ * `multicall(bytes[])` is built in: it is only answered as the outer call, and its subcalls cannot be `multicall()`.
+ *
  * @example
  * ```ts
  * const ezccip = new EZCCIP({ signer: privateKey });
- * ezccip.register("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+ * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
  * export default { fetch: ezccip.fetch };
  * ```
  *
- * @typeParam extra - Additional fields passed with each request and merged into {@link CallContext}.
+ * @typeParam extra - Custom object passed with each request, available as `ctx.extra`.
  */
-export class EZCCIP<extra extends object = {}> {
+export class EZCCIP<extra = undefined> {
 	readonly options: Readonly<EZCCIPOptions<extra>>;
 	readonly #signer: Signer | undefined;
-	readonly #functions = new Map<Hex, RegisteredFunction<any, extra>>();
+	readonly #handlers = new Map<Hex, Handler<any, extra>>();
 
 	constructor(options: EZCCIPOptions<extra> = {}) {
 		this.options = options;
 		this.#signer = options.signer ? toSigner(options.signer) : undefined;
-		// always enabled, see: recursionLimit
-		this.register(MULTICALL, async ([calls], context, history) => {
-			history.show = false;
-			const results = calls.map((call) => this.#call(call, context, history.enter()).catch(encodeErrorString));
+		this.addHandler(MULTICALL, async ([calls], ctx) => {
+			ctx.history.show = false;
+			const results = calls.map((call) =>
+				this.#call(call, ctx.nested(ctx.history.addChild()), true).catch(encodeErrorString),
+			);
 			return [await Promise.all(results)];
 		});
 	}
@@ -100,50 +102,50 @@ export class EZCCIP<extra extends object = {}> {
 		return this.options.protocol ?? (this.#signer ? "ens" : "raw");
 	}
 
-	/** Registered functions, including `multicall`. */
-	get functions(): RegisteredFunction<AbiFunction, extra>[] {
-		return [...this.#functions.values()];
+	/** All handlers, including the built-in `multicall`. */
+	get handlers(): Handler<AbiFunction, extra>[] {
+		return [...this.#handlers.values()];
 	}
 
 	/**
-	 * Registers an offchain function. Arguments and outputs are typed from the function.
-	 * Registering the same selector again replaces it.
+	 * Adds a handler for an offchain function. Arguments and outputs are typed from the function.
+	 * Adding the same selector again replaces it.
 	 *
 	 * @example
 	 * ```ts
-	 * ezccip.register("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
-	 * ezccip.register(AbiFunction.fromAbi(abi, "f"), ([x], context, history) => [x]);
+	 * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+	 * ezccip.addHandler(getAbiItem({ abi, name: "f" }), ([x], ctx) => [x]);
 	 * ```
 	 */
-	register<const signature extends string>(
+	addHandler<const signature extends string>(
 		signature: signature,
-		handler: FunctionHandler<ParseFunction<signature>, extra>,
-	): RegisteredFunction<ParseFunction<signature>, extra>;
-	register<const abiFunction extends AbiFunction>(
+		fn: HandlerFunction<ParseFunction<signature>, extra>,
+	): Handler<ParseFunction<signature>, extra>;
+	addHandler<const abiFunction extends AbiFunction>(
 		abiFunction: abiFunction,
-		handler: FunctionHandler<abiFunction, extra>,
-	): RegisteredFunction<abiFunction, extra>;
-	register(abiFunction: string | AbiFunction, handler: FunctionHandler<any, extra>): RegisteredFunction<any, extra> {
+		fn: HandlerFunction<abiFunction, extra>,
+	): Handler<abiFunction, extra>;
+	addHandler(abiFunction: string | AbiFunction, fn: HandlerFunction<any, extra>): Handler<any, extra> {
 		if (typeof abiFunction === "string") {
 			const signature = abiFunction.trim();
 			abiFunction = parseAbiItem(signature.startsWith("function") ? signature : `function ${signature}`) as AbiFunction;
 		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
-		const registered = {
+		const handler = {
 			abiFunction,
 			selector: toFunctionSelector(abiFunction),
 			signature: toFunctionSignature(abiFunction),
-			handler,
+			fn,
 		};
-		this.#functions.set(registered.selector, registered);
-		return registered;
+		this.#handlers.set(handler.selector, handler);
+		return handler;
 	}
 
-	/** Finds a registered function by name, signature, selector, or ABI. */
-	getFunction(key: string | AbiFunction): RegisteredFunction<AbiFunction, extra> | undefined {
+	/** Finds a handler by name, signature, selector, or ABI. */
+	findHandler(key: string | AbiFunction): Handler<AbiFunction, extra> | undefined {
 		if (typeof key !== "string") key = toFunctionSelector(key);
-		if (/^0x[0-9a-f]{8}$/i.test(key)) return this.#functions.get(key.toLowerCase() as Hex);
-		return this.functions.find((x) => x.abiFunction.name === key || x.signature === key);
+		if (/^0x[0-9a-f]{8}$/i.test(key)) return this.#handlers.get(key.toLowerCase() as Hex);
+		return this.handlers.find((x) => x.abiFunction.name === key || x.signature === key);
 	}
 
 	/**
@@ -151,7 +153,7 @@ export class EZCCIP<extra extends object = {}> {
 	 * `resolve(name, data)` is answered from the record returned by `getRecord`.
 	 */
 	enableENSIP10(getRecord: GetRecord<extra>, options?: ENSIP10Options) {
-		return this.register(RESOLVE, createENSIP10Handler(getRecord, options));
+		return this.addHandler(RESOLVE, createENSIP10Handler(getRecord, options));
 	}
 
 	/**
@@ -160,7 +162,8 @@ export class EZCCIP<extra extends object = {}> {
 	 * @example
 	 * ```ts
 	 * const { sender, data } = await request.json();
-	 * const { data: response, history } = await ezccip.handleRead({ sender, data });
+	 * const { data: response, context } = await ezccip.handleRead({ sender, data });
+	 * console.log(context.history.toString());
 	 * ```
 	 */
 	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType<extra>> {
@@ -172,36 +175,37 @@ export class EZCCIP<extra extends object = {}> {
 			throw new CCIPReadError("expected calldata", { status: 400 });
 		}
 		const signer = parameters.signer ? toSigner(parameters.signer) : this.#signer;
-		const history = new History(this.options.recursionLimit ?? 2);
-		const context = {
-			...parameters.extra,
-			sender: getAddress(sender),
-			calldata: data.toLowerCase() as Hex,
-			origin: getAddress(parameters.origin ?? sender),
-			protocol: parameters.protocol ?? this.options.protocol ?? (signer ? "ens" : "raw"),
-			signer,
-			ttl: parameters.ttl ?? this.options.ttl ?? 60,
-			request: parameters.request,
-			history,
-		} as CallContext<extra>;
-		const result = await this.#call(context.calldata, context, history);
-		return { data: await encodeResponse(context as CallContext, result), history, context };
+		const ctx = new CallContext<extra>(
+			{
+				sender: getAddress(sender),
+				calldata: data.toLowerCase() as Hex,
+				request: parameters.request,
+				extra: parameters.extra as extra,
+				origin: getAddress(parameters.origin ?? sender),
+				protocol: parameters.protocol ?? this.options.protocol ?? (signer ? "ens" : "raw"),
+				signer,
+				ttl: parameters.ttl ?? this.options.ttl ?? 60,
+			},
+			new History(),
+		);
+		const result = await this.#call(ctx.calldata, ctx, false);
+		return { data: await encodeResponse(ctx, result), context: ctx };
 	}
 
-	async #call(calldata: Hex, context: CallContext<extra>, history: History): Promise<Hex> {
+	async #call(calldata: Hex, ctx: CallContext<extra>, isSubcall: boolean): Promise<Hex> {
+		const { history } = ctx;
 		try {
 			history.calldata = calldata;
 			const selector = getSelector(calldata);
-			const fn = this.#functions.get(selector);
-			if (!fn || (!history.level && selector === MULTICALL_SELECTOR)) {
+			const handler = this.#handlers.get(selector);
+			if (!handler || (isSubcall && selector === MULTICALL_SELECTOR)) {
 				throw new CCIPReadError(`unsupported ccip method: ${selector}`);
 			}
-			history.name = fn.abiFunction.name;
-			const args = decodeAbiParameters(fn.abiFunction.inputs, stripSelector(calldata));
-			history.args = history.show = args;
-			const result = await fn.handler(args as never, context, history);
+			history.name = handler.abiFunction.name;
+			history.args = decodeAbiParameters(handler.abiFunction.inputs, stripSelector(calldata));
+			const result = await handler.fn(history.args as never, ctx);
 			if (!result) return "0x"; // returns ()
-			if (Array.isArray(result)) return encodeAbiParameters(fn.abiFunction.outputs, result as never);
+			if (Array.isArray(result)) return encodeAbiParameters(handler.abiFunction.outputs, result as never);
 			return bytesLikeToHex(result as BytesLike); // already encoded
 		} catch (err) {
 			history.error = err;
@@ -215,13 +219,15 @@ export class EZCCIP<extra extends object = {}> {
 	 */
 	handleRequest(
 		request: Request,
-		...[options]: {} extends extra ? [options?: HandleRequestOptions<extra>] : [options: HandleRequestOptions<extra>]
+		...[options]: undefined extends extra
+			? [options?: HandleRequestOptions<extra>]
+			: [options: HandleRequestOptions<extra>]
 	): Promise<Response> {
 		return handleRequest(this, request, options);
 	}
 
 	/**
-	 * Fetch handler, bound to this instance.
+	 * Fetch handler, bound to this instance. Use {@link handleRequest} when `extra` is required.
 	 *
 	 * @example
 	 * ```ts
@@ -232,8 +238,8 @@ export class EZCCIP<extra extends object = {}> {
 	readonly fetch = (request: Request): Promise<Response> => handleRequest(this, request);
 }
 
-async function encodeResponse(context: CallContext, result: Hex): Promise<Hex> {
-	const { protocol, signer } = context;
+async function encodeResponse(ctx: CallContext<any>, result: Hex): Promise<Hex> {
+	const { protocol, signer } = ctx;
 	if (protocol === "raw") return result;
 	if (protocol !== "ens" && protocol !== "tor") {
 		throw new CCIPReadError(`unknown protocol: ${protocol satisfies never}`);
@@ -242,9 +248,9 @@ async function encodeResponse(context: CallContext, result: Hex): Promise<Hex> {
 	return signResponse({
 		protocol,
 		signer,
-		origin: context.origin,
-		expires: BigInt(Math.floor(Date.now() / 1000) + context.ttl),
-		request: context.calldata,
+		origin: ctx.origin,
+		expires: BigInt(Math.floor(Date.now() / 1000) + ctx.ttl),
+		request: ctx.calldata,
 		result,
 	});
 }

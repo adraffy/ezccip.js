@@ -22,7 +22,7 @@ const decode = (data: `0x${string}`) => decodeFunctionResult({ abi: [fn], data }
 
 function make(options?: EZCCIPOptions) {
 	const ezccip = new EZCCIP(options);
-	ezccip.register(fn, ([s]) => [s.toUpperCase()]);
+	ezccip.addHandler(fn, ([s]) => [s.toUpperCase()]);
 	return ezccip;
 }
 
@@ -94,10 +94,10 @@ for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
 
 test("handler changes protocol", async () => {
 	const ezccip = new EZCCIP({ signer: privateKey, protocol: "raw" });
-	ezccip.register(fn, ([s], context) => {
-		context.protocol = "tor";
-		context.ttl = 1000;
-		context.origin = origin;
+	ezccip.addHandler(fn, ([s], ctx) => {
+		ctx.protocol = "tor";
+		ctx.ttl = 1000;
+		ctx.origin = origin;
 		return [s];
 	});
 	const { data: response } = await ezccip.handleRead({ sender, data: request });
@@ -113,4 +113,16 @@ test("hash layout", () => {
 	const tail = [origin, numberToHex(1n, { size: 8 }), keccak256(p.request), keccak256(p.result)] as const;
 	expect(getResponseHash("ens", p)).toBe(keccak256(concat(["0x1900", ...tail])));
 	expect(getResponseHash("tor", p)).toBe(keccak256(concat(tail)));
+});
+
+test("handler changes signer", async () => {
+	const other = generatePrivateKey();
+	const ezccip = new EZCCIP({ signer: privateKey });
+	ezccip.addHandler(fn, ([s], ctx) => {
+		ctx.signer = other; // private key or LocalAccount
+		return [s];
+	});
+	const { data: response } = await ezccip.handleRead({ sender, data: request });
+	const verified = await verifyResponse({ protocol: "ens", response, request, origin: sender });
+	expect(verified.signer).toBe(privateKeyToAccount(other).address);
 });

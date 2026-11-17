@@ -12,11 +12,11 @@ const ezccip = new EZCCIP({
 
 const DNSTORWithENSProtocol = "0x3CA097Edd180Ea2C2436BD30c021Ca20869087a0";
 
-ezccip.register("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
+ezccip.addHandler("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
 
-ezccip.enableENSIP10((name, context) => {
-	if (context.origin === DNSTORWithENSProtocol) {
-		context.protocol = "ens"; // dynamic protocol change
+ezccip.enableENSIP10((name, ctx) => {
+	if (ctx.origin === DNSTORWithENSProtocol) {
+		ctx.protocol = "ens"; // dynamic protocol change
 	}
 	if (name === "__dne") return; // unreachable
 	return {
@@ -38,13 +38,13 @@ ezccip.enableENSIP10((name, context) => {
 				case "notice":
 					return new Date().toLocaleString();
 				case "description":
-					return `Connection from ${context.request?.headers.get("user-agent")}`;
+					return `Connection from ${ctx.request?.headers.get("user-agent")}`;
 				case "avatar":
 					return "https://raffy.xyz/ens.jpg";
 				case "url":
 					return "https://github.com/namestonehq/ezccip.js";
 				case "location":
-					return `Protocol(${context.protocol}) Sender(${context.sender})`;
+					return `Protocol(${ctx.protocol}) Sender(${ctx.sender})`;
 			}
 		},
 		pubkey: () => ({ x: 1n, y: 2n }),

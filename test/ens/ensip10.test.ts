@@ -118,7 +118,7 @@ describe("profiles", () => {
 		contenthash: () => "0xe301",
 		name: () => "raffy.eth",
 		pubkey: () => ({ x: 1, y: 2n }),
-		ABI: (types) => (types & 1 ? { type: 1, data: "0x7b7d" } : undefined),
+		ABI: (contentTypes) => (contentTypes & 1n ? { type: 1n, data: "0x7b7d" } : undefined),
 	};
 	test("text", async () => expect(await query(record, text, [NODE, "name"])).toBe("Raffy"));
 	test("text (missing)", async () => expect(await query(record, text, [NODE, "x"])).toBe(""));
@@ -141,7 +141,7 @@ describe("profiles", () => {
 	});
 	test("no record", async () => expect(await query(undefined, text, [NODE, "name"])).toBe(""));
 	test("multicall", async () => {
-		const history = new History(1);
+		const history = new History();
 		const calls = [
 			encodeFunctionData({ abi: [text], args: [NODE, "name"] }),
 			encodeFunctionData({ abi: [name], args: [NODE] }),
@@ -150,6 +150,13 @@ describe("profiles", () => {
 		expect(decodeFunctionResult({ abi: [text], data: a! })).toBe("Raffy");
 		expect(decodeFunctionResult({ abi: [name], data: b! })).toBe("raffy.eth");
 		expect(String(history)).toBe("multicall()^2 [text(name) name()]");
+	});
+	test("multicall subcall cannot be multicall", async () => {
+		const nested = encodeFunctionData({ abi: [multicall], args: [[]] });
+		const [result] = (await query(record, multicall, [[nested]])) as Hex[];
+		expect(result).toBe(
+			encodeErrorResult({ abi: [UNSUPPORTED_RESOLVER_PROFILE], args: [toFunctionSelector(multicall)] }),
+		);
 	});
 	test("multicall disabled", async () => {
 		const calldata = encodeFunctionData({ abi: [multicall], args: [[]] });

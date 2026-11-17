@@ -69,7 +69,7 @@ export function serveEZCCIP(
 			if (!print) return ccip.fetch(request);
 			const ip = request.headers.get("x-forwarded-for") ?? server.requestIP(request)?.address;
 			return ccip.handleRequest(request, {
-				onResponse: ({ url, history }) => print(ip, url.pathname, history.toString()),
+				onResponse: ({ url, context }) => print(ip, url.pathname, context.history.toString()),
 				onError: ({ url, error, status }) =>
 					print(
 						ip,

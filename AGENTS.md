@@ -30,11 +30,12 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 ```
 src/
   index.ts      public API; explicit named exports only (no `export *`)
-  ezccip.ts     EZCCIP class: function registry, dispatch, multicall, handleRead()
-  types.ts      shared public types: CallContext, FunctionHandler, FunctionResult, RegisteredFunction
+  ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRead()
+  context.ts    CallContext: per-call view of request-wide state (+ this call's History)
+  types.ts      shared public types: Handler, HandlerFunction, HandlerResult, ExtraParameter
   http.ts       Request -> Response: parseCCIPReadRequest, originFromPath, handleRequest, hooks
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
-  history.ts    History: per-call trace used for logging
+  history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
   errors.ts     CCIPReadError (carries HTTP status), encodeErrorString
   serve.ts      serveEZCCIP(): Bun-only quick server, separate export "@namestone/ezccip/serve"
   utils.ts      small internal helpers (some re-exported, eg. asciiize)
@@ -49,12 +50,13 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 ## Conventions
 
 - **Relative imports use `.js` extensions** (`import { x } from "./http.js"`), even though the files are `.ts`. `tsc` does not rewrite `.ts` specifiers inside emitted `.d.ts` files, so `.ts` imports break consumers.
-- **Types come from the ABI.** `register()` takes one function (a human-readable signature, with or without the `function` prefix, or a viem `AbiFunction`), and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
-- **Handler signature** is `(args, context, history) => result`. `context` is shared across a request (including `multicall` children) and its `origin`, `protocol`, `signer`, and `ttl` fields are intentionally mutable. `history` is per call.
+- **Types come from the ABI.** `addHandler()` takes one function (a human-readable signature, with or without the `function` prefix, or a viem `AbiFunction`), and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
+- **Handler signature** is `(args, ctx) => result`. `ctx` is a `CallContext`, created per call, that reads and writes one request-wide `ReadState`: `origin`, `protocol`, `signer`, and `ttl` are intentionally mutable and shared by every call in the request. `ctx.history` belongs to that call only. Nested calls get their context from `ctx.nested(history)`.
+- **Multicall** is only answered as the outer call; subcalls cannot be `multicall()`. Inside `resolve()`, `processENSIP10` allows one `multicall()` at the top of the inner data, and its subcalls cannot be `multicall()` either. There is no recursion limit option.
 - **Results**: a tuple is ABI-encoded with the function outputs, `Hex`/`Uint8Array` is treated as already encoded, and falsy means `returns ()`.
 - **Errors**: throw `CCIPReadError` with a `status` for client errors (400/405). Other errors become 500. Inside `multicall`, per-call failures are encoded as `Error(string)` instead of failing the whole request.
 - **Generic naming** follows viem: lowercase type parameters (`abiFunction`, `extra`), `XParameters` / `XReturnType` for function inputs and outputs, object parameters for public functions with more than two inputs.
-- **`extra` context** (eg. Cloudflare `env`) is threaded through `EZCCIP<extra>`. It's optional when `{}` and required otherwise (see `ExtraParameter`).
+- **`extra`** is one custom object (eg. `{ env }` on Cloudflare) typed by `EZCCIP<extra>` and read as `ctx.extra`. Never spread it into the context. It's optional when the type allows `undefined`, otherwise required (see `ExtraParameter`).
 - **Hooks** (`onResponse`, `onError`) are observers. They must never change or break a response; exceptions in hooks are swallowed.
 - **No signal handlers or global side effects in `src/`.** `serveEZCCIP` logs, but process lifecycle belongs to the caller (see `scripts/demo.ts`).
 - Public API changes should update `README.md` (including the migration section) and `src/index.ts`.

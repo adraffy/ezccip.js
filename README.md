@@ -12,10 +12,7 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
   - `"tor"` &mdash; [namestonehq/**TheOffchainResolver.sol**](https://github.com/namestonehq/TheOffchainResolver.sol)
   - `"raw"` &mdash; unsigned response (EVM Gateway, testing, etc.)
 - `enableENSIP10()` wildcard resolver with drop-in [namestonehq/**enson.js**](https://github.com/namestonehq/enson.js) **Record**-type support
-- supports _Multicall-over-CCIP-Read_
-  - `resolve(name, multicall([...]))`
-  - `multicall([resolve(name, ...), ...])`
-  - `multicall([resolve(name, multicall([...])), ...])`
+- supports _Multicall-over-CCIP-Read_ (see [Multicall](#multicall))
 - `serveEZCCIP()` to quickly launch a server (Bun)
 
 ## Demo
@@ -36,19 +33,19 @@ const ezccip = new EZCCIP({
 
 // implement an arbitrary function
 // args and return type are inferred from the signature
-ezccip.register("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
 
 // or from an existing ABI
-ezccip.register(getAbiItem({ abi, name: "f" }), async ([x], context, history) => {
-	history.show = [context.sender]; // replace arguments of f(...) in logger
-	history.name = "Chonk"; // rename f() to Chonk() in logger
-	context.protocol = "raw"; // override signing protocol for this request
+ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx) => {
+	ctx.history.show = [ctx.sender]; // replace arguments of f(...) in logger
+	ctx.history.name = "Chonk"; // rename f() to Chonk() in logger
+	ctx.protocol = "raw"; // override signing protocol for this request
 	return "0x..."; // return already-encoded bytes
 });
 
 // implement a wildcard ENSIP-10 resolver
 // which handles resolve() automatically
-ezccip.enableENSIP10(async (name, context) => {
+ezccip.enableENSIP10(async (name, ctx) => {
 	return {
 		text(key) {
 			switch (key) {
@@ -66,12 +63,23 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### Handlers
 
-`(args, context, history) => result`
+`(args, ctx) => result`
 
 - `args` &mdash; decoded arguments
-- `context` &mdash; shared by every call in the request: `sender`, `calldata`, `request`, plus mutable `origin`, `protocol`, `signer`, `ttl`
-- `history` &mdash; this call's entry in the request log
+- `ctx` &mdash; a `CallContext`, one per call:
+  - `sender`, `calldata`, `request` (the HTTP `Request`, if any), `extra` (your custom object)
+  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. These are shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response
+  - `history` &mdash; this call's log entry: set `show` or `name` to change how it's logged
 - `result` &mdash; tuple of outputs (ABI-encoded for you), already-encoded `Hex | Uint8Array`, or nothing for `returns ()`
+
+#### Multicall
+
+`multicall(bytes[])` is built in and answered only as the outer call; its subcalls cannot be `multicall()`. `resolve()` may contain one `multicall()` of its own:
+
+- `multicall([f(), g()])`
+- `multicall([resolve(name, ...), ...])`
+- `resolve(name, multicall([...]))`
+- `multicall([resolve(name, multicall([...])), ...])`
 
 ### serveEZCCIP()
 
@@ -113,11 +121,11 @@ import { serve } from "@hono/node-server";
 serve({ port: 8000, fetch: ezccip.fetch });
 ```
 
-Need per-request data (eg. Cloudflare `env`)? Type it and pass it to `handleRequest()`:
+Need per-request data (eg. Cloudflare `env`)? Type it, pass it to `handleRequest()`, and read it from `ctx.extra`:
 
 ```ts
 const ezccip = new EZCCIP<{ env: Env }>();
-ezccip.register("function f() returns (string)", (_, { env }) => [env.NAME]);
+ezccip.addHandler("function f() returns (string)", (_, ctx) => [ctx.extra.env.NAME]);
 export default {
 	fetch: (request: Request, env: Env) => ezccip.handleRequest(request, { extra: { env } }),
 };
@@ -126,8 +134,8 @@ export default {
 Or skip HTTP entirely:
 
 ```ts
-const { data, history } = await ezccip.handleRead({ sender, data: calldata });
-console.log(history.toString());
+const { data, context } = await ezccip.handleRead({ sender, data: calldata });
+console.log(context.history.toString());
 ```
 
 ### Hooks
@@ -136,7 +144,7 @@ Observe successes and failures, eg. for logging or metrics. Pass them to the con
 
 ```ts
 const ezccip = new EZCCIP({
-	onResponse: ({ url, history }) => console.log(url.pathname, history.toString()),
+	onResponse: ({ url, context }) => console.log(url.pathname, context.history.toString()),
 	onError: ({ url, status, error }) => console.error(url.pathname, status, error),
 });
 ```
@@ -189,10 +197,13 @@ bun run build  # dist/
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
 - `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP()` (Bun-only, synchronous, no default signing key); or use `ezccip.fetch` with any server
-- `register(abi, impl)` &rarr; one function per call: `register(signature | AbiFunction, (args, context, history) => ...)`
-- `findHandler()` &rarr; `getFunction()`
+- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx) => ...)`
+- handlers receive `(args, ctx)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
+- extra context keys &rarr; one custom object, `ctx.extra`
 - `handleRead(sender, calldata, config)` &rarr; `handleRead({ sender, data, ...config })`
 - `log` / `formatError` options &rarr; `onResponse` / `onError` hooks (`serveEZCCIP` logs by default)
-- `resolvers` option removed &mdash; use `parseOrigin` or `origin`; disable multicall with `recursionLimit: 0`
-- `history.then()` &rarr; `history.chain()`, `history.head()` &rarr; `history.last()`
+- `resolvers` option removed &mdash; use `parseOrigin` or `origin`
+- `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
+- `History`: `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`; no recursion `level`
+- `ENSRecord.ABI(contentTypes)` receives a `bigint`
 - `labels_from_dns_encoded` &rarr; `dnsDecode`, `error_with` &rarr; `CCIPReadError`
