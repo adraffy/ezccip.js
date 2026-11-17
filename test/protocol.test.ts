@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { AbiFunction, Address, Hex, Secp256k1 } from "ox";
+import { AbiFunction, Address, Hash, Hex, Secp256k1 } from "ox";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-	decodeENSResponse,
 	EZCCIP,
+	getResponseHash,
+	type SignedProtocol,
 	privateKeyToSigner,
 	type SignerLike,
 	toSigner,
+	verifyResponse,
 } from "../src/index.ts";
 
 const privateKey = Secp256k1.randomPrivateKey();
@@ -38,7 +40,7 @@ test("raw", async () => {
 	expect(AbiFunction.decodeResult(fn, data)).toBe("CHONK");
 });
 
-describe("ens", () => {
+for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) describe(protocol, () => {
 	const signers: Record<string, SignerLike> = {
 		"private key": privateKey,
 		"viem account": privateKeyToAccount(privateKey),
@@ -46,11 +48,11 @@ describe("ens", () => {
 	};
 	for (const [label, signer] of Object.entries(signers)) {
 		test(label, async () => {
-			const ezccip = make({ signer, ttl: 30 });
+			const ezccip = make({ signer, protocol, ttl: 30 });
 			expect(ezccip.signer).toBe(address);
 			const { data: response, context } = await ezccip.handleRead({ sender, data: request, origin });
-			expect(context.protocol).toBe("ens");
-			const decoded = decodeENSResponse({ response, request, origin });
+			expect(context.protocol).toBe(protocol);
+			const decoded = verifyResponse({ protocol, response, request, origin });
 			expect(decoded.signer).toBe(address);
 			expect(AbiFunction.decodeResult(fn, decoded.result)).toBe("CHONK");
 			const now = Math.floor(Date.now() / 1000);
@@ -60,28 +62,28 @@ describe("ens", () => {
 	}
 
 	test("origin defaults to sender", async () => {
-		const { data: response } = await make({ signer: privateKey }).handleRead({ sender, data: request });
-		expect(decodeENSResponse({ response, request, origin: sender }).signer).toBe(address);
-		expect(decodeENSResponse({ response, request, origin }).signer).not.toBe(address);
+		const { data: response } = await make({ signer: privateKey, protocol }).handleRead({ sender, data: request });
+		expect(verifyResponse({ protocol, response, request, origin: sender }).signer).toBe(address);
+		expect(verifyResponse({ protocol, response, request, origin }).signer).not.toBe(address);
 	});
 
 	test("per-request signer", async () => {
 		const other = Secp256k1.randomPrivateKey();
-		const { data: response } = await make({ signer: privateKey }).handleRead({
+		const { data: response } = await make({ signer: privateKey, protocol }).handleRead({
 			sender,
 			data: request,
 			signer: other,
 		});
-		expect(decodeENSResponse({ response, request, origin: sender }).signer).toBe(
+		expect(verifyResponse({ protocol, response, request, origin: sender }).signer).toBe(
 			privateKeyToSigner(other).address
 		);
 	});
 
 	test("missing signer", async () => {
-		expect(make({ protocol: "ens" }).handleRead({ sender, data: request })).rejects.toThrow("requires a signer");
+		expect(make({ protocol }).handleRead({ sender, data: request })).rejects.toThrow("requires a signer");
 	});
 
-	test("explicit raw with signer", async () => {
+	test.skipIf(protocol !== "ens")("explicit raw with signer", async () => {
 		const { data } = await make({ signer: privateKey, protocol: "raw" }).handleRead({ sender, data: request });
 		expect(AbiFunction.decodeResult(fn, data)).toBe("CHONK");
 	});
@@ -96,8 +98,37 @@ test("handler changes protocol", async () => {
 		return [s];
 	});
 	const { data: response } = await ezccip.handleRead({ sender, data: request });
-	const decoded = decodeENSResponse({ response, request, origin });
+	const decoded = verifyResponse({ protocol: "ens", response, request, origin });
 	expect(decoded.signer).toBe(address);
 	expect(Number(decoded.expires)).toBeGreaterThan(Date.now() / 1000 + 900);
 	expect(Hex.validate(decoded.result)).toBe(true);
+});
+
+test("default protocol", () => {
+	expect(new EZCCIP().protocol).toBe("raw");
+	expect(new EZCCIP({ signer: privateKey }).protocol).toBe("ens");
+	expect(new EZCCIP({ signer: privateKey, protocol: "tor" }).protocol).toBe("tor");
+});
+
+// packed layouts expected by the onchain verifiers
+test("hash layout", () => {
+	const p = {
+		origin: "0x0000000000000000000000000000000000000002",
+		expires: 1n,
+		request: "0x12345678",
+		result: "0x",
+	} as const;
+	const ens = getResponseHash("ens", p);
+	const tor = getResponseHash("tor", p);
+	expect(ens).not.toBe(tor);
+	const packed = (prefix: string) =>
+		Hex.concat(
+			prefix as Hex.Hex,
+			p.origin,
+			Hex.fromNumber(1n, { size: 8 }),
+			Hash.keccak256(p.request),
+			Hash.keccak256(p.result)
+		);
+	expect(ens).toBe(Hash.keccak256(packed("0x1900")));
+	expect(tor).toBe(Hash.keccak256(packed("0x")));
 });

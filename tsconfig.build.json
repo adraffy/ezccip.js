@@ -1,7 +1,7 @@
 {
 	"extends": "./tsconfig.json",
 	"compilerOptions": {
-		"types": [],
+		"types": ["bun"],
 		"lib": ["ES2023", "DOM"],
 		"noEmit": false,
 		"declaration": true,

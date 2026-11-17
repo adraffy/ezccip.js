@@ -2,7 +2,7 @@ import type { AbiParametersToPrimitiveTypes } from "abitype";
 import { AbiError, AbiFunction, AbiItem, AbiParameters, Address, Hex } from "ox";
 import { RESOLVE_ABI, type ENSRecord, type ProcessENSIP10Options, processENSIP10 } from "./ensip10.ts";
 import { History } from "./history.ts";
-import { encodeENSResponse, type Protocol } from "./protocol.ts";
+import { type Protocol, signResponse } from "./protocol.ts";
 import { type Signer, type SignerLike, toSigner } from "./signer.ts";
 import {
 	type Awaitable,
@@ -83,7 +83,7 @@ export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
 	unreachableAsEmpty?: boolean;
 };
 
-export type EZCCIPOptions = {
+export type EZCCIPOptions<extra extends object = {}> = {
 	/** Default signer. */
 	signer?: SignerLike;
 	/** Default signing protocol. (default: `"ens"` if `signer` is set, otherwise `"raw"`) */
@@ -96,11 +96,35 @@ export type EZCCIPOptions = {
 	origin?: Address.Address;
 	/** Extract origin from the request URL. (default: first `/0x{40}` path component) */
 	parseOrigin?: (url: URL) => Address.Address | undefined;
-	/** Logging for {@link EZCCIP.fetch}. `true` uses `console.log`. (default: false) */
-	log?: boolean | ((...args: unknown[]) => void);
-	/** Format errors before logging. */
-	formatError?: (error: unknown) => unknown;
+} & RequestHooks<extra>;
+
+/** Called by {@link EZCCIP.handleRequest} after a successful response. */
+export type ResponseEvent<extra extends object = {}> = {
+	request: Request;
+	url: URL;
+	/** ABI-encoded response. */
+	data: Hex.Hex;
+	history: History;
+	context: CallContext<extra>;
 };
+
+/** Called by {@link EZCCIP.handleRequest} after a failed response. */
+export type ErrorEvent = {
+	request: Request;
+	url: URL;
+	error: unknown;
+	/** HTTP status of the response. */
+	status: number;
+};
+
+/** Optional observers for {@link EZCCIP.handleRequest}, eg. for logging. Exceptions thrown by hooks are ignored. */
+export type RequestHooks<extra extends object = {}> = {
+	onResponse?: ((event: ResponseEvent<extra>) => void) | undefined;
+	onError?: ((event: ErrorEvent) => void) | undefined;
+};
+
+export type HandleRequestOptions<extra extends object = {}> = RequestHooks<extra> &
+	({} extends extra ? { extra?: extra } : { extra: extra });
 
 export type HandleReadParameters<extra extends object = {}> = {
 	sender: Hex.Hex;
@@ -139,17 +163,12 @@ const UnreachableName = AbiError.fromAbi(RESOLVE_ABI, "UnreachableName");
  */
 export class EZCCIP<extra extends object = {}> {
 	readonly #handlers = new Map<Hex.Hex, RegisteredHandler<any, extra>>();
-	readonly options: Readonly<EZCCIPOptions>;
+	readonly options: Readonly<EZCCIPOptions<extra>>;
 	readonly #signer: Signer | undefined;
-	readonly #log: ((...args: unknown[]) => void) | undefined;
 
-	constructor(options: EZCCIPOptions = {}) {
+	constructor(options: EZCCIPOptions<extra> = {}) {
 		this.options = options;
 		this.#signer = options.signer ? toSigner(options.signer) : undefined;
-		this.#log =
-			options.log === true
-				? (...a) => console.log(new Date(), ...a)
-				: options.log || undefined;
 		// multicall is always enabled, disable with { recursionLimit: 0 }
 		this.register(MULTICALL, async ([calls], context, history) => {
 			history.show = false;
@@ -166,6 +185,11 @@ export class EZCCIP<extra extends object = {}> {
 	/** Address of the default signer. */
 	get signer(): Address.Address | undefined {
 		return this.#signer?.address;
+	}
+
+	/** Default signing protocol. */
+	get protocol(): Protocol {
+		return this.options.protocol ?? (this.#signer ? "ens" : "raw");
 	}
 
 	/** All registered handlers. */
@@ -275,7 +299,10 @@ export class EZCCIP<extra extends object = {}> {
 			sender: Address.checksum(sender),
 			calldata: data.toLowerCase() as Hex.Hex,
 			origin: Address.checksum(parameters.origin ?? sender),
-			protocol: parameters.protocol ?? this.options.protocol ?? (signer ? "ens" : "raw"),
+			protocol:
+				parameters.protocol ??
+				this.options.protocol ??
+				(signer ? "ens" : "raw"),
 			signer,
 			ttl: parameters.ttl ?? this.options.ttl ?? 60,
 			request: parameters.request,
@@ -312,16 +339,21 @@ export class EZCCIP<extra extends object = {}> {
 	}
 
 	/**
-	 * Handle an HTTP request with extra context.
+	 * Handle an HTTP request.
 	 * Supports `POST {sender, data}` and `GET .../{sender}/{data}.json`.
 	 * The origin is parsed from the URL using {@link EZCCIPOptions.parseOrigin}.
+	 * Hooks are called in addition to the instance hooks.
 	 */
 	async handleRequest(
 		request: Request,
-		...[extra]: {} extends extra ? [extra?: extra] : [extra: extra]
+		...[options]: {} extends extra
+			? [options?: HandleRequestOptions<extra>]
+			: [options: HandleRequestOptions<extra>]
 	): Promise<Response> {
 		const url = new URL(request.url);
 		const headers = { "access-control-allow-origin": "*" };
+		const hooks = [this.options, options];
+		let event: ResponseEvent<extra>;
 		try {
 			let sender: Hex.Hex;
 			let data: Hex.Hex;
@@ -361,21 +393,22 @@ export class EZCCIP<extra extends object = {}> {
 				path.match(/\/(0x[0-9a-f]{40})(?=\/|$)/i)?.[1] as Address.Address | undefined ??
 				this.options.parseOrigin?.(url) ??
 				this.options.origin;
-			const { data: response, history } = await this.handleRead({
+			const res = await this.handleRead({
 				sender,
 				data,
 				origin,
 				request,
-				extra,
+				extra: options?.extra,
 			} as HandleReadParameters<extra>);
-			this.#log?.(url.pathname, history.toString());
-			return Response.json({ data: response }, { headers });
-		} catch (err) {
-			this.#log?.(request.method, url.pathname, this.options.formatError?.(err) ?? err);
-			const status = err instanceof CCIPReadError ? err.status : 500;
-			const message = err instanceof Error ? err.message : String(err);
+			event = { request, url, ...res };
+		} catch (error) {
+			const status = error instanceof CCIPReadError ? error.status : 500;
+			for (const x of hooks) callHook(x?.onError, { request, url, error, status });
+			const message = error instanceof Error ? error.message : String(error);
 			return Response.json({ message }, { status, headers });
 		}
+		for (const x of hooks) callHook(x?.onResponse, event);
+		return Response.json({ data: event.data }, { headers });
 	}
 
 	/**
@@ -392,13 +425,25 @@ export class EZCCIP<extra extends object = {}> {
 }
 
 
+function callHook<T>(hook: ((event: T) => void) | undefined, event: T) {
+	try {
+		hook?.(event);
+	} catch {
+		// ignored
+	}
+}
+
 async function encodeResponse(context: CallContext<any>, result: Hex.Hex): Promise<Hex.Hex> {
 	switch (context.protocol) {
 		case "raw":
 			return result;
-		case "ens": {
-			if (!context.signer) throw new CCIPReadError(`protocol "ens" requires a signer`);
-			return encodeENSResponse({
+		case "ens":
+		case "tor": {
+			if (!context.signer) {
+				throw new CCIPReadError(`protocol "${context.protocol}" requires a signer`);
+			}
+			return signResponse({
+				protocol: context.protocol,
 				signer: context.signer,
 				origin: context.origin,
 				expires: BigInt(Math.floor(Date.now() / 1000) + context.ttl),

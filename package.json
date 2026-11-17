@@ -34,6 +34,10 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./serve": {
+			"types": "./dist/serve.d.ts",
+			"import": "./dist/serve.js"
 		}
 	},
 	"files": [

@@ -1,18 +1,24 @@
 // bun run scripts/demo.ts
 import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.ts";
+import { serveEZCCIP } from "../src/serve.ts";
 import pkg from "../package.json" with { type: "json" };
 
 const ezccip = new EZCCIP({
 	// demo key: do not use in production
 	signer: "0xbd1e630bd00f12f0810083ea3bd2be936ead3b2fa84d1bd6690c77da043e9e02",
-	log: true,
+	protocol: "tor",
 });
+
+const DNSTORWithENSProtocol = "0x3CA097Edd180Ea2C2436BD30c021Ca20869087a0";
 
 ezccip.register("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [
 	a * 1000n + b,
 ]);
 
 ezccip.enableENSIP10((name, context) => {
+	if (context.origin === DNSTORWithENSProtocol) {
+		context.protocol = "ens"; // dynamic protocol change
+	}
 	if (name === "__dne") return; // unreachable
 	return {
 		addr(coinType) {
@@ -49,9 +55,5 @@ ezccip.enableENSIP10((name, context) => {
 	};
 });
 
-console.log(`Signer: ${ezccip.signer}`);
-
-export default {
-	port: 8016,
-	fetch: ezccip.fetch,
-};
+const ccip = serveEZCCIP(ezccip, { port: 8016 });
+process.on("SIGINT", () => ccip.shutdown().then(() => process.exit()));

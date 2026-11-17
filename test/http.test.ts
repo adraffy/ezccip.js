@@ -90,14 +90,42 @@ test("CORS", async () => {
 	expect((await post(ezccip)).headers.get("access-control-allow-origin")).toBe("*");
 });
 
-test("log", async () => {
-	const lines: unknown[][] = [];
-	const ezccip = make({ log: (...a) => lines.push(a) });
-	await post(ezccip);
-	await post(ezccip, "/", { sender: SENDER, data: AbiFunction.encodeData(fail) });
-	expect(lines).toHaveLength(2);
-	expect(lines[0]).toEqual(["/", "getOrigin()"]);
-	expect(lines[1]?.[0]).toBe("POST");
+describe("hooks", () => {
+	test("instance", async () => {
+		const events: string[] = [];
+		const ezccip = make({
+			onResponse: ({ history, url, data }) => events.push(`ok ${url.pathname} ${history} ${data.length}`),
+			onError: ({ status, error }) => events.push(`error ${status} ${(error as Error).message}`),
+		});
+		await post(ezccip, `/${ORIGIN}`);
+		await post(ezccip, "/", { sender: SENDER, data: AbiFunction.encodeData(fail) });
+		await post(ezccip, "/", { sender: "0x", data: "0x" });
+		expect(events).toEqual([
+			`ok /${ORIGIN} getOrigin() 66`,
+			"error 500 chonk",
+			"error 400 expected sender address",
+		]);
+	});
+	test("per request + instance", async () => {
+		const events: string[] = [];
+		const ezccip = make({ onResponse: () => events.push("instance") });
+		await ezccip.handleRequest(
+			new Request("http://localhost/", {
+				method: "POST",
+				body: JSON.stringify({ sender: SENDER, data: AbiFunction.encodeData(getOrigin) }),
+			}),
+			{ onResponse: () => events.push("request") }
+		);
+		expect(events).toEqual(["instance", "request"]);
+	});
+	test("throwing hook is ignored", async () => {
+		const ezccip = make({
+			onResponse: () => {
+				throw new Error("bad hook");
+			},
+		});
+		expect(await originOf(await post(ezccip))).toBe(SENDER);
+	});
 });
 
 test("extra context via handleRequest", async () => {
@@ -108,7 +136,7 @@ test("extra context via handleRequest", async () => {
 			method: "POST",
 			body: JSON.stringify({ sender: SENDER, data: AbiFunction.getSelector("function f()") }),
 		}),
-		{ env: { name: "chonk" } }
+		{ extra: { env: { name: "chonk" } } }
 	);
 	const { data } = (await res.json()) as { data: Hex.Hex };
 	expect(AbiParameters.decode(AbiParameters.from(["string"]), data)).toEqual(["chonk"]);
