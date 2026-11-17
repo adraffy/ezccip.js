@@ -20,7 +20,7 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 
 ## Demo
 
-1. `bun run start` &mdash; starts a CCIP-Read server on port `8016` (see [demo.ts](./demo.ts))
+1. `bun run start` &mdash; starts a CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
 1. check [Postman](https://namestonehq.github.io/ezccip.js/test/postman.html) &larr; change endpoint to `http://localhost:8016`
 
 ## Usage

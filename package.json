@@ -26,7 +26,7 @@
 	"scripts": {
 		"check": "tsc --noEmit",
 		"test": "bun test",
-		"start": "bun run demo.ts",
+		"start": "bun run scripts/demo.ts",
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"prepublishOnly": "bun run check && bun test && bun run build"
 	},

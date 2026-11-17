@@ -1,6 +1,6 @@
-// bun run demo.ts
-import { COIN_TYPE_DEFAULT, EZCCIP } from "./src/index.ts";
-import pkg from "./package.json" with { type: "json" };
+// bun run scripts/demo.ts
+import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.ts";
+import pkg from "../package.json" with { type: "json" };
 
 const ezccip = new EZCCIP({
 	// demo key: do not use in production
