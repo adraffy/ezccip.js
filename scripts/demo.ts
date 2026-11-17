@@ -10,20 +10,17 @@ const ezccip = new EZCCIP({
 	protocol: "tor",
 });
 
-const DNSTORWithENSProtocol = "0x3CA097Edd180Ea2C2436BD30c021Ca20869087a0";
-
 ezccip.addHandler("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
 
 ezccip.enableENSIP10((name, ctx) => {
-	if (ctx.origin === DNSTORWithENSProtocol) {
-		ctx.protocol = "ens"; // dynamic protocol change
-	}
 	if (name === "__dne") return; // unreachable
 	return {
 		addr(coinType) {
 			switch (coinType) {
 				case COIN_TYPE_DEFAULT:
 					return "0x51050ec063d393217b436747617ad1c2285aeeee";
+				case 0n:
+					return "0x76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac"; // encoded $btc address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa (Satoshi)
 				case 3n:
 					return "0x76a9149eb02ebe2f323494320f9b1153f07a2e0eff528588ac"; // encoded $doge address
 			}
