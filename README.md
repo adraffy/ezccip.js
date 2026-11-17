@@ -83,7 +83,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### serveEZCCIP()
 
-Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance or for a function that returns ENSIP-10 records. It logs startup, every response, every error, and shutdown. Pass `log: false` to disable, or your own function.
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance or for a function that returns ENSIP-10 records. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";

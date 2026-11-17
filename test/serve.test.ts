@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { decodeFunctionResult, encodeFunctionData, type Hex, parseAbiItem, toFunctionSelector } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { EZCCIP, verifyResponse } from "../src/index.js";
@@ -27,7 +27,11 @@ function make() {
 describe("serveEZCCIP", () => {
 	test("logging", async () => {
 		const lines: string[] = [];
-		const ccip = await serveEZCCIP(make(), { log: (...a) => lines.push(a.map(String).join(" ")) });
+		using _ = spyOn(console, "log").mockImplementation((date, ...a) => {
+			expect(date).toBeInstanceOf(Date);
+			lines.push(a.map(String).join(" "));
+		});
+		const ccip = await serveEZCCIP(make());
 		expect(ccip.endpoint).toBe(`http://localhost:${ccip.port}`);
 		expect(ccip.signer).toBeUndefined();
 		expect(ccip.context).toBe(ccip.endpoint);
@@ -59,6 +63,14 @@ describe("serveEZCCIP", () => {
 		expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
 		// bad JSON
 		expect((await fetch(ccip.endpoint, { method: "POST", body: "{" })).status).toBe(400);
+	});
+
+	test("log: false", async () => {
+		using spy = spyOn(console, "log");
+		const ccip = await serveEZCCIP(make(), { log: false });
+		await post(ccip.endpoint, encodeFunctionData({ abi: [f], args: [1n] }));
+		await ccip.shutdown();
+		expect(spy).not.toHaveBeenCalled();
 	});
 
 	test("record function + signer", async () => {

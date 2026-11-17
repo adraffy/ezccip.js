@@ -15,12 +15,8 @@ export type ServeOptions = {
 	port?: number;
 	/** Interface to listen on. (default: all) */
 	hostname?: string;
-	/**
-	 * Logs startup, every response, every error, and shutdown.
-	 * `true` uses `console.log` with a date, a function receives the same arguments, `false` disables.
-	 * (default: true)
-	 */
-	log?: boolean | ((...args: unknown[]) => void);
+	/** Log startup, every response, every error, and shutdown with `console.log`, prefixed by the date. (default: true) */
+	log?: boolean;
 };
 
 export type EZCCIPServer = {
@@ -63,7 +59,7 @@ export async function serveEZCCIP(
 		ezccip = new EZCCIP(options);
 		ezccip.enableENSIP10(getRecord);
 	}
-	const print = log === true ? (...a: unknown[]) => console.log(new Date(), ...a) : log || undefined;
+	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 
 	const server = createServer(async (req, res) => {
 		const ip = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
