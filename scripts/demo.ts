@@ -5,7 +5,8 @@ import pkg from "../package.json" with { type: "json" };
 import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.js";
 import { serveEZCCIP } from "../src/serve.js";
 
-const ezccip = new EZCCIP({
+// handlers receive { ip } as their last argument, see serveEZCCIP() below
+const ezccip = new EZCCIP<{ ip: string | undefined }>({
 	// public demo key from its preimage, like the original serve(): do not use in production
 	signer: keccak256(stringToBytes("ezccip")), // 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9
 	protocol: "tor",
@@ -14,7 +15,7 @@ const ezccip = new EZCCIP({
 ezccip.addHandler("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
 
 ezccip.enableENSIP10({
-	resolve(name, ctx) {
+	resolve(name, ctx, { ip }) {
 		if (name === "__dne") return; // unreachable
 		return {
 			addr(coinType) {
@@ -37,7 +38,7 @@ ezccip.enableENSIP10({
 					case "notice":
 						return new Date().toLocaleString();
 					case "description":
-						return `Connection from ${ctx.request?.headers.get("user-agent")}`;
+						return `Connection from ${ip}`;
 					case "avatar":
 						return "https://raffy.xyz/ens.jpg";
 					case "url":
@@ -53,5 +54,8 @@ ezccip.enableENSIP10({
 	},
 });
 
-const ccip = await serveEZCCIP(ezccip, { port: 8016 });
+const ccip = await serveEZCCIP(ezccip, {
+	port: 8016,
+	extra: (req) => ({ ip: req.socket.remoteAddress }),
+});
 process.on("SIGINT", () => ccip.shutdown().then(() => process.exit()));

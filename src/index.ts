@@ -12,16 +12,16 @@ export {
 	processENSIP10,
 } from "./ens/ensip10.js";
 export { CCIPReadError } from "./errors.js";
-export { EZCCIP, type EZCCIPOptions, type HandleReadParameters, type HandleReadReturnType } from "./ezccip.js";
+export { EZCCIP, type EZCCIPOptions, type HandleRequestOptions, type HandleRequestReturnType } from "./ezccip.js";
+export { createFetchHandler, type FetchHandlerOptions } from "./fetch.js";
 export { History } from "./history.js";
 export {
 	type CCIPReadRequest,
-	type HandleRequestOptions,
+	type HTTPOptions,
 	originFromPath,
+	parseCCIPReadBody,
+	parseCCIPReadPath,
 	parseCCIPReadRequest,
-	type RequestErrorEvent,
-	type RequestHooks,
-	type RequestSuccessEvent,
 } from "./http.js";
 export {
 	getResponseHash,

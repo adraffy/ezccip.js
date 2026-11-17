@@ -31,10 +31,11 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 ```
 src/
   index.ts      public API; explicit named exports only (no `export *`)
-  ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRead()
+  ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
   context.ts    CallContext: per-call view of request-wide state (+ this call's History)
   types.ts      shared public types: Handler, HandlerFunction, HandlerResult, ExtraParameter
-  http.ts       Request -> Response: parseCCIPReadRequest, originFromPath, handleRequest, hooks
+  http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS, answer() + logAnswer() (internal)
+  fetch.ts      createFetchHandler(): fetch(Request) => Response adapter
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
   errors.ts     CCIPReadError (carries HTTP status); publicErrorMessage, encodeErrorString (internal)
@@ -67,19 +68,20 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 - **Errors**: `CCIPReadError` messages and statuses reach clients (400 bad input, 404 unknown function/profile, 405 method). Any other error is a 500 with message `"internal error"` (see `publicErrorMessage`), and the real error goes to `onError` and `History`. Inside `multicall`, failed subcalls are encoded as `Error(string)` using the same rule.
 - **Generic naming** follows viem: lowercase type parameters (`abiFunction`, `extra`), `XParameters` / `XReturnType` for function inputs and outputs, object parameters for public functions with more than two inputs.
 - **`extra`** is one custom object (eg. `{ env }` on Cloudflare) typed by `EZCCIP<extra>` and passed as the third argument to handlers and `resolve`: `(args, ctx, extra)`. It is threaded through `#call` (including `multicall` subcalls), not stored on `CallContext`, so `CallContext` and the hook events are not generic. It's optional when the type allows `undefined`, otherwise required (see `ExtraParameter`).
-- **Hooks** (`onResponse`, `onError`) are observers. They must never change or break a response; exceptions in hooks are swallowed.
+- **Core has no HTTP.** `EZCCIP` knows nothing about `Request`, CORS, URLs, or origin parsing. `handleRequest()` validates input, throws `CCIPReadError`s, and returns `{ data, context }`; origin defaults to `sender`. HTTP lives in the adapters, `createFetchHandler` (`src/fetch.ts`) and `serveEZCCIP` (`src/serve.ts`), which share `answer()`/`logAnswer()` from `src/http.ts` and the options `cors`, `parseOrigin`, `log`, `extra`. `serveEZCCIP` reads `{sender, data}` straight from the `node:http` request; don't route it through a fetch `Request`.
+- **Adapters build `extra` per request** with an `extra(request)` option (required when the `EZCCIP` type needs it). Call it inside `answer()` so a throwing `extra` becomes a 500, not a crashed server.
 - **No signal handlers or global side effects in `src/`.** `serveEZCCIP` logs, but process lifecycle belongs to the caller (see `scripts/demo.ts`).
 - Public API changes should update `README.md` (including the migration section) and `src/index.ts`.
 
 ## Signing protocols
 
-- `"ens"`: hash `keccak256(0x1900 . origin . uint64 expires . keccak256(request) . keccak256(result))`, response `abi.encode(bytes result, uint64 expires, bytes sig)`.
-- `"tor"`: hash `keccak256(origin . uint64 expires . keccak256(request) . keccak256(result))`, response `abi.encode(bytes sig, uint64 expires, bytes result)`.
+- `"ens"`: hash `keccak256(0x1900 . origin . uint64 expires . keccak256(calldata) . keccak256(result))`, response `abi.encode(bytes result, uint64 expires, bytes sig)`.
+- `"tor"`: hash `keccak256(origin . uint64 expires . keccak256(calldata) . keccak256(result))`, response `abi.encode(bytes sig, uint64 expires, bytes result)`.
 - `"raw"`: the result itself.
 
 These layouts must match the onchain verifiers. `test/signing.test.ts` pins them; don't change them without a matching contract change.
 
 ## Testing
 
-- Prefer calling `ezccip.fetch(new Request(...))` directly over starting servers. Use `Bun.serve({ port: 0 })` or `serveEZCCIP()` only for end-to-end tests (eg. viem `ccipRequest` interop), and always stop it.
+- Prefer `ezccip.handleRequest(sender, calldata)` for logic, and `createFetchHandler(ezccip)(new Request(...))` for HTTP behavior, over starting servers. Use `Bun.serve({ port: 0 })` or `serveEZCCIP()` only for end-to-end tests (eg. viem `ccipRequest` interop), and always stop it.
 - Build calldata with viem (`encodeFunctionData`, `parseAbiItem`) rather than hand-written hex.

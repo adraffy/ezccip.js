@@ -6,14 +6,14 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 
 - TypeScript, ESM-only, built on [viem](https://viem.sh) (peer dependency)
 - handler arguments and return values are typed from the ABI
-- works with any runtime that speaks `fetch(Request) => Response`: Bun, Deno, Cloudflare Workers, Hono, Node adapters, etc.
+- runtime-agnostic core: `handleRequest(sender, calldata)`, plus HTTP adapters for `fetch` runtimes (Bun, Deno, Cloudflare Workers, Hono) and `node:http`
 - signing protocols:
   - `"ens"` &mdash; [ensdomains/**offchain-resolver**](https://github.com/ensdomains/offchain-resolver/) and [ccip.tools](https://ccip.tools/)
   - `"tor"` &mdash; [namestonehq/**TheOffchainResolver.sol**](https://github.com/namestonehq/TheOffchainResolver.sol)
   - `"raw"` &mdash; unsigned response (EVM Gateway, testing, etc.)
 - `enableENSIP10()` wildcard resolver with drop-in [namestonehq/**enson.js**](https://github.com/namestonehq/enson.js) **Record**-type support
 - supports _Multicall-over-CCIP-Read_ (see [Multicall](#multicall))
-- `serveEZCCIP()` to quickly launch a server (Node, Bun, Deno)
+- `serveEZCCIP()` to quickly launch a server (Node, Bun, Deno), `createFetchHandler()` for everything else
 
 ## Demo
 
@@ -22,7 +22,8 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 ## Usage
 
 ```ts
-import { EZCCIP } from "@namestone/ezccip";
+import { createFetchHandler, EZCCIP } from "@namestone/ezccip";
+import { serveEZCCIP } from "@namestone/ezccip/serve";
 import { getAbiItem } from "viem";
 
 const ezccip = new EZCCIP({
@@ -61,7 +62,13 @@ ezccip.enableENSIP10({
 	// unreachableAsEmpty: false, // unknown names revert UnreachableName
 });
 
-export default { fetch: ezccip.fetch }; // bound fetch() handler
+// answer a request directly
+const { data, context } = await ezccip.handleRequest(sender, calldata); // { origin, ... } optional
+console.log(context.history.toString()); // eg. resolve(raffy.eth).text(name)
+
+// or serve it over HTTP
+export default { fetch: createFetchHandler(ezccip) }; // Bun, Deno, Cloudflare Workers, ...
+await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@namestone/ezccip/serve")
 ```
 
 ### Handlers
@@ -72,15 +79,15 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 - `ctx` &mdash; a `CallContext`, one per call:
   - `calldata` &mdash; this call's calldata
   - `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
-  - `sender`, `request` (the HTTP `Request`, if any) &mdash; shared by the whole request
+  - `sender` &mdash; shared by the whole request
   - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Also shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response. The protocol is chosen after handlers run, so setting `ctx.signer` alone switches the default to `"ens"`
-- `extra` &mdash; your custom object for this request (eg. `{ env }`), see [Serving with fetch](#serving-with-fetch); `undefined` unless you declare `EZCCIP<Extra>`
+- `extra` &mdash; your custom object for this request (eg. `{ env }` or the client IP), see [Extra](#extra); `undefined` unless you declare `EZCCIP<Extra>`
 - `result` &mdash; tuple of outputs (ABI-encoded for you) or already-encoded `Hex | Uint8Array`. Functions without outputs may return nothing
 
 #### Errors
 
 - throw a `CCIPReadError` to send its message and status to the client, eg. `new CCIPReadError("not found", { status: 404 })`
-- other errors are sent as `500` `{"message": "internal error"}`; the real error goes to the `onError` hook and the log
+- `handleRequest()` throws; the HTTP adapters turn other errors into `500` `{"message": "internal error"}`, and log the real error when `log` is on
 - bad requests and calldata are `400`, unknown functions are `404`
 - inside `multicall()`, each failed subcall is answered with `Error(string)` using the same rule
 
@@ -93,9 +100,18 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 - `resolve(name, multicall([...]))`
 - `multicall([resolve(name, multicall([...])), ...])`
 
-### serveEZCCIP()
+### HTTP
 
-Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 `resolve` function: `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`, signed with a random key unless `signer` is set. Request bodies over 1 MiB are rejected. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable, and `cors: false` to turn off CORS headers.
+Both adapters answer `POST {sender, data}` and `GET .../{sender}/{data}.json` with `{data}`, or `{message}` and an HTTP status, and take the same options:
+
+- `cors` &mdash; add CORS headers and answer `OPTIONS` preflight requests (default: `true`)
+- `parseOrigin: (url: URL) => Address | undefined` &mdash; see [Sender vs Origin](#sender-vs-origin)
+- `log` &mdash; log every response and error with `console.log`
+- `extra: (request) => Extra` &mdash; see [Extra](#extra)
+
+#### serveEZCCIP()
+
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 `resolve` function: `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`, signed with a random key unless `signer` is set. Request bodies over 1 MiB are rejected. It logs startup, every response, every error, and shutdown unless `log: false`.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";
@@ -115,54 +131,36 @@ await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
 await serveEZCCIP(new EZCCIP({ signer: privateKey }).enableENSIP10({ resolve, unreachableAsEmpty: true }));
 ```
 
-### Serving with fetch
+#### createFetchHandler()
 
-`ezccip.fetch` is a bound `(request: Request) => Promise<Response>` (only available when `extra` is optional):
-
-- `POST {sender, data}` &rarr; `{data}`
-- `GET .../{sender}/{data}.json` &rarr; `{data}`
-- errors &rarr; `{message}` with HTTP status
-- CORS enabled (pass `cors: false` to `handleRequest()` to turn it off)
+Returns a `fetch(request) => response` handler for fetch-based runtimes.
 
 ```ts
+import { createFetchHandler } from "@namestone/ezccip";
+
 // Bun
-Bun.serve({ port: 8000, fetch: ezccip.fetch });
+Bun.serve({ port: 8000, fetch: createFetchHandler(ezccip) });
 
 // Bun / Cloudflare Workers / Deno
-export default { fetch: ezccip.fetch };
-
-// Node (via @hono/node-server)
-import { serve } from "@hono/node-server";
-serve({ port: 8000, fetch: ezccip.fetch });
+export default { fetch: createFetchHandler(ezccip) };
 ```
 
-Need per-request data (eg. Cloudflare `env`)? Type it, pass it to `handleRequest()`, and handlers (and `resolve`) receive it as their third argument:
+#### Extra
+
+Handlers (and `resolve`) receive a custom object as their third argument. Declare its type on `EZCCIP`, and the adapters require an `extra` function to build it from each request:
 
 ```ts
+// Cloudflare Workers: the handler's extra arguments (env, ctx) are passed through
 const ezccip = new EZCCIP<{ env: Env }>();
 ezccip.addHandler("function f() returns (string)", (_, ctx, { env }) => [env.NAME]);
-export default {
-	fetch: (request: Request, env: Env) => ezccip.handleRequest(request, { extra: { env } }),
-};
-```
+export default { fetch: createFetchHandler(ezccip, { extra: (request, env: Env) => ({ env }) }) };
 
-Or skip HTTP entirely:
+// node:http: the client's IP
+const ezccip = new EZCCIP<{ ip: string | undefined }>();
+await serveEZCCIP(ezccip, { extra: (req) => ({ ip: req.socket.remoteAddress }) });
 
-```ts
-const { data, context } = await ezccip.handleRead({ sender, data: calldata });
-console.log(context.history.toString());
-```
-
-### Hooks
-
-Observe successes and failures, eg. for logging or metrics. Pass them to the constructor, or per request to `handleRequest()`. They can't affect the response: exceptions and rejected promises from hooks are ignored.
-
-```ts
-const ezccip = new EZCCIP({
-	onResponse: ({ url, context }) => console.log(url.pathname, context.history.toString()),
-	// context is undefined if the request was malformed
-	onError: ({ url, status, error, context }) => console.error(url.pathname, status, context?.history, error),
-});
+// directly
+await ezccip.handleRequest(sender, calldata, { extra: { ip } });
 ```
 
 ### Sender vs Origin
@@ -172,9 +170,9 @@ const ezccip = new EZCCIP({
 - **Best Solution**: embed `origin` into the endpoint as a path component:
   1.  `http://my.server/.../0xABCD/...`
   1.  `origin = 0xABCD`
-  - this is the default `parseOrigin`; supply your own `parseOrigin: (url: URL) => Address | undefined` to replace it
-- or, supply a fallback `origin` option (also used by `handleRead()`)
-- if neither finds one, `origin = sender`
+  - this is what the HTTP adapters do by default; pass `parseOrigin: (url: URL) => Address | undefined` to replace it
+- or, pass `origin` to `handleRequest(sender, calldata, { origin })`
+- if there's no origin, `origin = sender`
 
 ### processENSIP10()
 
@@ -217,7 +215,7 @@ bun run smoke  # build, then run dist/ on Node
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
-- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`); or use `ezccip.fetch` with any server
+- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
 - `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, extra) => ...)`
 - handlers receive `(args, ctx, extra)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
 - extra context keys &rarr; one custom object, passed to handlers as the third argument: `(args, ctx, extra)`
@@ -225,9 +223,9 @@ bun run smoke  # build, then run dist/ on Node
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`
 - `addr()` values for EVM coin types must be 20 bytes (were truncated or padded)
 - unknown functions are `404` and bad calldata `400` (both were `500`); non-`CCIPReadError` messages are hidden from clients
-- `handleRead(sender, calldata, config)` &rarr; `handleRead({ sender, data, ...config })`
-- `log` / `formatError` options &rarr; `onResponse` / `onError` hooks (`serveEZCCIP` logs by default)
-- `resolvers` option removed &mdash; use `parseOrigin` or `origin`
+- `handleRead(sender, calldata, config)` &rarr; `handleRequest(sender, calldata, { origin, protocol, signer, ttl, extra })`
+- `log` / `formatError` options &rarr; `log: boolean` on `serveEZCCIP` (default on) and `createFetchHandler`
+- `context.ip` / `context.url` &rarr; build them with the adapters' `extra` option
 - `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
 - `History` only builds the log line: set `name` or `show` (an array, or `false`); `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`
 - `ENSRecord.ABI(contentTypes)` receives a `bigint`

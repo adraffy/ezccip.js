@@ -64,6 +64,47 @@ describe("serveEZCCIP", () => {
 		expect((await fetch(ccip.endpoint, { method: "POST", body: "{" })).status).toBe(400);
 	});
 
+	test("parseOrigin", async () => {
+		await using ccip = await serveEZCCIP(make(), {
+			log: false,
+			parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined,
+		});
+		const originOf = async (path: string) => {
+			const res = await post(`${ccip.endpoint}${path}`, toFunctionSelector(getOrigin));
+			return decodeFunctionResult({ abi: [getOrigin], data: ((await res.json()) as { data: Hex }).data });
+		};
+		expect(await originOf(`/?o=${ORIGIN}`)).toBe(ORIGIN);
+		expect(await originOf(`/${ORIGIN}`)).toBe(SENDER); // replaces the path heuristic
+	});
+
+	test("extra from the node request", async () => {
+		const ezccip = new EZCCIP<{ ip: string | undefined; agent: string | undefined }>();
+		const who = ezccip.addHandler("function who() returns (string)", (_, __, { ip, agent }) => [`${ip} ${agent}`]);
+		// @ts-expect-error extra is required
+		() => serveEZCCIP(ezccip);
+		await using ccip = await serveEZCCIP(ezccip, {
+			log: false,
+			extra: (req) => ({ ip: req.socket.remoteAddress, agent: req.headers["user-agent"] }),
+		});
+		const res = await fetch(ccip.endpoint, {
+			method: "POST",
+			headers: { "user-agent": "chonk" },
+			body: JSON.stringify({ sender: SENDER, data: who.selector }),
+		});
+		const { data } = (await res.json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [who.abiFunction], data })).toMatch(/ chonk$/);
+	});
+
+	test("errors", async () => {
+		await using ccip = await serveEZCCIP(make(), { log: false });
+		expect((await fetch(ccip.endpoint, { method: "PUT" })).status).toBe(405);
+		expect((await fetch(ccip.endpoint, { method: "POST", body: "{" })).status).toBe(400);
+		expect((await fetch(`${ccip.endpoint}/nope`)).status).toBe(400);
+		const res = await post(ccip.endpoint, toFunctionSelector(fail));
+		expect(res.status).toBe(500);
+		expect(await res.json()).toEqual({ message: "internal error" });
+	});
+
 	test("log: false", async () => {
 		using spy = spyOn(console, "log");
 		const ccip = await serveEZCCIP(make(), { log: false });

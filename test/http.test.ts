@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, expectTypeOf, spyOn, test } from "bun:test";
 import {
 	bytesToHex,
 	ccipRequest,
@@ -11,28 +11,42 @@ import {
 } from "viem";
 import { packetToBytes } from "viem/ens";
 import { RESOLVE } from "../src/ens/abi.js";
-import { EZCCIP, type EZCCIPOptions, originFromPath, parseCCIPReadRequest } from "../src/index.js";
+import {
+	CCIPReadError,
+	createFetchHandler,
+	EZCCIP,
+	originFromPath,
+	parseCCIPReadBody,
+	parseCCIPReadPath,
+	parseCCIPReadRequest,
+} from "../src/index.js";
 
 const SENDER = "0x0000000000000000000000000000000000000001";
 const ORIGIN = "0x0000000000000000000000000000000000000002";
-const OTHER = "0x0000000000000000000000000000000000000003";
 
 const getOrigin = parseAbiItem("function getOrigin() returns (address)");
 const fail = parseAbiItem("function fail()");
+const failPublic = parseAbiItem("function failPublic()");
 const GET_ORIGIN = toFunctionSelector(getOrigin);
-const FAIL = toFunctionSelector(fail);
 
-function make(options?: EZCCIPOptions) {
-	const ezccip = new EZCCIP(options);
+function make() {
+	const ezccip = new EZCCIP();
 	ezccip.addHandler(getOrigin, (_, ctx) => [ctx.origin]);
 	ezccip.addHandler(fail, () => {
-		throw new Error("chonk");
+		throw new Error("secret");
+	});
+	ezccip.addHandler(failPublic, () => {
+		throw new CCIPReadError("chonk", { status: 418 });
 	});
 	return ezccip;
 }
 
-function post(ezccip: EZCCIP, path = "/", body: unknown = { sender: SENDER, data: GET_ORIGIN }) {
-	return ezccip.fetch(new Request(`http://localhost${path}`, { method: "POST", body: JSON.stringify(body) }));
+function post(
+	fetch: (request: Request) => Promise<Response>,
+	path = "/",
+	body: unknown = { sender: SENDER, data: GET_ORIGIN },
+) {
+	return fetch(new Request(`http://localhost${path}`, { method: "POST", body: JSON.stringify(body) }));
 }
 
 async function originOf(res: Response) {
@@ -41,164 +55,141 @@ async function originOf(res: Response) {
 	return decodeFunctionResult({ abi: [getOrigin], data });
 }
 
-describe("parseCCIPReadRequest", () => {
-	test("POST", async () => {
-		const request = new Request("http://localhost/a", {
-			method: "POST",
-			body: JSON.stringify({ sender: SENDER, data: "0x12" }),
+describe("parsing", () => {
+	test("parseCCIPReadPath", () => {
+		expect(parseCCIPReadPath(`/a/${SENDER}/0x12.json`)).toEqual({ sender: SENDER, data: "0x12" });
+		expect(parseCCIPReadPath(`/${SENDER}/0x12`)).toEqual({ sender: SENDER, data: "0x12" });
+		expect(() => parseCCIPReadPath("/")).toThrow(CCIPReadError);
+	});
+	test("parseCCIPReadBody", () => {
+		expect(parseCCIPReadBody(JSON.stringify({ sender: SENDER, data: "0x12" }))).toEqual({
+			sender: SENDER,
+			data: "0x12",
 		});
-		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12" });
+		expect(() => parseCCIPReadBody("{")).toThrow("expected JSON");
+		expect(() => parseCCIPReadBody("{}")).toThrow("expected {sender, data}");
+		expect(() => parseCCIPReadBody("null")).toThrow("expected {sender, data}");
 	});
-	test("GET", async () => {
-		const request = new Request(`http://localhost/a/${SENDER}/0x12.json`);
-		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12" });
+	test("parseCCIPReadRequest", async () => {
+		const body = JSON.stringify({ sender: SENDER, data: "0x12" });
+		const expected = { sender: SENDER, data: "0x12" } as const;
+		expect(await parseCCIPReadRequest(new Request("http://localhost/", { method: "POST", body }))).toEqual(expected);
+		expect(await parseCCIPReadRequest(new Request(`http://localhost/${SENDER}/0x12.json`))).toEqual(expected);
+		const put = parseCCIPReadRequest(new Request("http://localhost/", { method: "PUT" }));
+		expect(put).rejects.toMatchObject({ status: 405 });
 	});
-	test("errors", async () => {
-		const bad = (init: RequestInit, path = "/") => parseCCIPReadRequest(new Request(`http://localhost${path}`, init));
-		expect(bad({ method: "POST", body: "{" })).rejects.toMatchObject({ status: 400 });
-		expect(bad({ method: "POST", body: "{}" })).rejects.toMatchObject({ status: 400 });
-		expect(bad({ method: "GET" })).rejects.toMatchObject({ status: 400 });
-		expect(bad({ method: "PUT" })).rejects.toMatchObject({ status: 405 });
-	});
-});
-
-test("originFromPath", () => {
-	expect(originFromPath(`/${ORIGIN}`)).toBe(ORIGIN);
-	expect(originFromPath(`/a/${ORIGIN.toUpperCase().replace("0X", "0x")}/b`)).toBe(ORIGIN);
-	expect(originFromPath(`/${ORIGIN}00`)).toBeUndefined();
-	expect(originFromPath("/")).toBeUndefined();
-});
-
-describe("origin", () => {
-	test("default", async () => expect(await originOf(await post(make()))).toBe(SENDER));
-	test("fallback", async () => expect(await originOf(await post(make({ origin: ORIGIN })))).toBe(ORIGIN));
-	test("parseOrigin", async () => {
-		const ezccip = make({ parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined });
-		expect(await originOf(await post(ezccip, `/?o=${ORIGIN}`))).toBe(ORIGIN);
-		// replaces the path heuristic
-		expect(await originOf(await post(ezccip, `/${OTHER}`))).toBe(SENDER);
-	});
-	test("parseOrigin falls back to origin option", async () => {
-		const ezccip = make({ origin: OTHER, parseOrigin: () => undefined });
-		expect(await originOf(await post(ezccip, `/${ORIGIN}`))).toBe(OTHER);
-	});
-	for (const path of [`/${ORIGIN}`, `/${ORIGIN}/`, `/a/${ORIGIN}/b`, `/a/${ORIGIN}?x=1`]) {
-		test(path, async () => expect(await originOf(await post(make({ origin: OTHER }), path))).toBe(ORIGIN));
-	}
-});
-
-describe("GET", () => {
-	test("/{sender}/{data}.json", async () => {
-		const res = await make().fetch(new Request(`http://localhost/${SENDER}/${GET_ORIGIN}.json`));
-		expect(await originOf(res)).toBe(SENDER);
-	});
-	test("/{origin}/{sender}/{data}", async () => {
-		const res = await make().fetch(new Request(`http://localhost/${ORIGIN}/${SENDER}/${GET_ORIGIN}`));
-		expect(await originOf(res)).toBe(ORIGIN);
+	test("originFromPath", () => {
+		expect(originFromPath(`/${ORIGIN}`)).toBe(ORIGIN);
+		expect(originFromPath(`/a/${ORIGIN.toUpperCase().replace("0X", "0x")}/b`)).toBe(ORIGIN);
+		expect(originFromPath(`/${ORIGIN}00`)).toBeUndefined();
+		expect(originFromPath("/")).toBeUndefined();
 	});
 });
 
-describe("errors", () => {
-	test("handler error", async () => {
-		const res = await post(make(), "/", { sender: SENDER, data: FAIL });
-		expect(res.status).toBe(500);
-		expect(await res.json()).toEqual({ message: "internal error" }); // not "chonk"
-	});
-	test("bad request", async () => {
-		const res = await post(make(), "/", { sender: "0x", data: "0x12345678" });
-		expect(res.status).toBe(400);
-	});
-	test("method", async () => {
-		const res = await make().fetch(new Request("http://localhost/", { method: "PUT" }));
-		expect(res.status).toBe(405);
-	});
-});
+describe("createFetchHandler", () => {
+	const fetch = createFetchHandler(make());
 
-test("cors: false", async () => {
-	const ezccip = make();
-	const request = (method: string) =>
-		new Request("http://localhost/", {
-			method,
-			body: method === "POST" ? JSON.stringify({ sender: SENDER, data: GET_ORIGIN }) : undefined,
+	describe("origin", () => {
+		test("defaults to sender", async () => expect(await originOf(await post(fetch))).toBe(SENDER));
+		for (const path of [`/${ORIGIN}`, `/${ORIGIN}/`, `/a/${ORIGIN}/b`, `/a/${ORIGIN}?x=1`]) {
+			test(path, async () => expect(await originOf(await post(fetch, path))).toBe(ORIGIN));
+		}
+		test("parseOrigin replaces the path", async () => {
+			const fetch = createFetchHandler(make(), {
+				parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined,
+			});
+			expect(await originOf(await post(fetch, `/?o=${ORIGIN}`))).toBe(ORIGIN);
+			expect(await originOf(await post(fetch, `/${ORIGIN}`))).toBe(SENDER);
 		});
-	const preflight = await ezccip.handleRequest(request("OPTIONS"), { cors: false });
-	expect(preflight.status).toBe(405);
-	const res = await ezccip.handleRequest(request("POST"), { cors: false });
-	expect(res.status).toBe(200);
-	expect(res.headers.get("access-control-allow-origin")).toBeNull();
-});
-
-test("CORS", async () => {
-	const ezccip = make();
-	const preflight = await ezccip.fetch(new Request("http://localhost/", { method: "OPTIONS" }));
-	expect(preflight.status).toBe(204);
-	expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
-	expect((await post(ezccip)).headers.get("access-control-allow-origin")).toBe("*");
-});
-
-describe("hooks", () => {
-	test("instance", async () => {
-		const events: string[] = [];
-		const ezccip = make({
-			onResponse: ({ url, context, data }) => events.push(`ok ${url.pathname} ${context.history} ${data.length}`),
-			onError: ({ status, error }) => events.push(`error ${status} ${(error as Error).message}`),
+		test("GET", async () => {
+			const get = (path: string) => fetch(new Request(`http://localhost${path}`));
+			expect(await originOf(await get(`/${SENDER}/${GET_ORIGIN}.json`))).toBe(SENDER);
+			expect(await originOf(await get(`/${ORIGIN}/${SENDER}/${GET_ORIGIN}`))).toBe(ORIGIN);
 		});
-		await post(ezccip, `/${ORIGIN}`);
-		await post(ezccip, "/", { sender: SENDER, data: FAIL });
-		await post(ezccip, "/", { sender: "0x", data: "0x" });
-		expect(events).toEqual([`ok /${ORIGIN} getOrigin() 66`, "error 500 chonk", "error 400 expected sender address"]);
 	});
-	test("instance + per request", async () => {
-		const events: string[] = [];
-		const ezccip = make({ onResponse: () => events.push("instance") });
+
+	describe("errors", () => {
+		test("handler error is hidden", async () => {
+			const res = await post(fetch, "/", { sender: SENDER, data: toFunctionSelector(fail) });
+			expect(res.status).toBe(500);
+			expect(await res.json()).toEqual({ message: "internal error" });
+		});
+		test("CCIPReadError is shown", async () => {
+			const res = await post(fetch, "/", { sender: SENDER, data: toFunctionSelector(failPublic) });
+			expect(res.status).toBe(418);
+			expect(await res.json()).toEqual({ message: "chonk" });
+		});
+		test("bad request", async () => {
+			expect((await post(fetch, "/", { sender: "0x", data: "0x12345678" })).status).toBe(400);
+			expect((await fetch(new Request("http://localhost/", { method: "POST", body: "{" }))).status).toBe(400);
+		});
+		test("unknown function", async () => {
+			expect((await post(fetch, "/", { sender: SENDER, data: "0x12345678" })).status).toBe(404);
+		});
+		test("method", async () => {
+			expect((await fetch(new Request("http://localhost/", { method: "PUT" }))).status).toBe(405);
+		});
+	});
+
+	test("CORS", async () => {
+		const preflight = await fetch(new Request("http://localhost/", { method: "OPTIONS" }));
+		expect(preflight.status).toBe(204);
+		expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+		expect((await post(fetch)).headers.get("access-control-allow-origin")).toBe("*");
+	});
+
+	test("cors: false", async () => {
+		const fetch = createFetchHandler(make(), { cors: false });
+		expect((await fetch(new Request("http://localhost/", { method: "OPTIONS" }))).status).toBe(405);
+		const res = await post(fetch);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+	});
+
+	test("log", async () => {
+		const lines: string[] = [];
+		using _ = spyOn(console, "log").mockImplementation((_date, ...a) => {
+			lines.push(a.map(String).join(" "));
+		});
+		const fetch = createFetchHandler(make(), { log: true });
+		await post(fetch);
+		await post(fetch, "/", { sender: SENDER, data: toFunctionSelector(fail) });
+		expect(lines[0]).toMatch(/ \/ getOrigin\(\)$/);
+		expect(lines[1]).toMatch(/ POST \/ 500 fail\(\)<secret> Error: secret/);
+	});
+
+	test("extra (eg. Cloudflare env)", async () => {
+		type Env = { NAME: string };
+		const ezccip = new EZCCIP<{ env: Env }>();
+		const f = ezccip.addHandler("function f() returns (string)", (_, __, { env }) => [env.NAME]);
+		const fetch = createFetchHandler(ezccip, { extra: (_request: Request, env: Env) => ({ env }) });
+		expectTypeOf(fetch).toEqualTypeOf<(request: Request, env: Env) => Promise<Response>>();
+		// @ts-expect-error extra is required
+		() => createFetchHandler(ezccip);
 		const request = new Request("http://localhost/", {
 			method: "POST",
-			body: JSON.stringify({ sender: SENDER, data: GET_ORIGIN }),
+			body: JSON.stringify({ sender: SENDER, data: f.selector }),
 		});
-		await ezccip.handleRequest(request, { onResponse: () => events.push("request") });
-		expect(events).toEqual(["instance", "request"]);
+		const { data } = (await (await fetch(request, { NAME: "chonk" })).json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [f.abiFunction], data })).toBe("chonk");
 	});
-	test("onError has context", async () => {
-		let history = "";
-		const ezccip = make({ onError: ({ context }) => (history = String(context?.history)) });
-		await post(ezccip, "/", { sender: SENDER, data: FAIL });
-		expect(history).toBe("fail()<chonk>");
-	});
-	test("rejecting async hook is ignored", async () => {
-		const ezccip = make({
-			onResponse: async () => {
-				throw new Error("bad hook");
-			},
-		});
-		expect(await originOf(await post(ezccip))).toBe(SENDER);
-		await new Promise((resolve) => setTimeout(resolve, 10)); // let a rejection surface
-	});
-	test("throwing hook is ignored", async () => {
-		const ezccip = make({
-			onResponse: () => {
-				throw new Error("bad hook");
-			},
-		});
-		expect(await originOf(await post(ezccip))).toBe(SENDER);
-	});
-});
 
-test("extra context", async () => {
-	const ezccip = new EZCCIP<{ env: { name: string } }>();
-	const fn = ezccip.addHandler("function f() returns (string)", (_, __, extra) => [extra.env.name]);
-	const request = new Request("http://localhost/", {
-		method: "POST",
-		body: JSON.stringify({ sender: SENDER, data: fn.selector }),
+	test("throwing extra is a 500, not a crash", async () => {
+		const ezccip = new EZCCIP<{ n: number }>();
+		ezccip.addHandler("function f()", () => {});
+		const fetch = createFetchHandler(ezccip, {
+			extra: () => {
+				throw new Error("bad extra");
+			},
+		});
+		expect((await post(fetch, "/", { sender: SENDER, data: toFunctionSelector("function f()") })).status).toBe(500);
 	});
-	const res = await ezccip.handleRequest(request, { extra: { env: { name: "chonk" } } });
-	const { data } = (await res.json()) as { data: Hex };
-	expect(decodeFunctionResult({ abi: [fn.abiFunction], data })).toBe("chonk");
 });
 
 describe("Bun.serve + viem ccipRequest", () => {
 	const ezccip = new EZCCIP();
 	ezccip.enableENSIP10({ resolve: (name, ctx) => ({ text: (key) => `${name}:${key}:${ctx.origin}` }) });
-	const server = Bun.serve({ port: 0, fetch: ezccip.fetch });
+	const server = Bun.serve({ port: 0, fetch: createFetchHandler(ezccip) });
 	afterAll(() => server.stop(true));
 
 	const text = parseAbiItem("function text(bytes32, string) returns (string)");

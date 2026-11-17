@@ -14,46 +14,26 @@ import {
 import { type CallContext, Context, defaultProtocol, type ReadState } from "./context.js";
 import { MULTICALL, RESOLVE } from "./ens/abi.js";
 import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
-import { CCIPReadError, encodeErrorString, publicErrorMessage } from "./errors.js";
-import {
-	CORS_HEADERS,
-	callHook,
-	type HandleRequestOptions,
-	originFromPath,
-	parseCCIPReadRequest,
-	type RequestHooks,
-} from "./http.js";
+import { CCIPReadError, encodeErrorString } from "./errors.js";
 import { checkProtocol, type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
 import type { BytesLike, ExtraParameter, Handler, HandlerFunction, ResponseOptions } from "./types.js";
-import { bytesLikeToHex, checkOrigin, checkTTL, decodeArgs, getSelector } from "./utils.js";
+import { bytesLikeToHex, checkTTL, decodeArgs, getSelector } from "./utils.js";
 
-export type EZCCIPOptions = RequestHooks &
+/** Defaults for every request: `protocol`, `signer`, and `ttl`. */
+export type EZCCIPOptions = ResponseOptions;
+
+export type HandleRequestOptions<extra = undefined> = ExtraParameter<extra> &
 	ResponseOptions & {
-		/**
-		 * Extracts the origin from the URL of an HTTP request.
-		 * (default: the first `/0x{40}` path component, see {@link originFromPath})
-		 */
-		parseOrigin?: ((url: URL) => Address | undefined) | undefined;
+		/** Contract that will verify the response. (default: `sender`) */
+		origin?: Address | undefined;
 	};
 
-export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> &
-	ResponseOptions & {
-		sender: Hex;
-		/** Calldata from `OffchainLookup`. */
-		data: Hex;
-		/** The HTTP request, if any. */
-		request?: Request | undefined;
-	};
-
-export type HandleReadReturnType = {
+export type HandleRequestReturnType = {
 	/** ABI-encoded response for EIP-3668. */
 	data: Hex;
 	/** Context of the outer call. Its `history` describes the whole response. */
 	context: CallContext;
 };
-
-/** `(request) => response`, only when `extra` is optional. Otherwise use {@link EZCCIP.handleRequest}. */
-export type FetchHandler<extra> = undefined extends extra ? (request: Request) => Promise<Response> : never;
 
 /** Human-readable function signature, with or without the `function` prefix. */
 type ParseFunction<signature extends string> = Extract<
@@ -62,6 +42,13 @@ type ParseFunction<signature extends string> = Extract<
 >;
 
 const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
+
+const ERROR_CONTEXTS = new WeakMap<object, CallContext>();
+
+/** @internal The context of the request that threw `error`, for logging which call failed. */
+export function errorContext(error: unknown): CallContext | undefined {
+	return error && typeof error === "object" ? ERROR_CONTEXTS.get(error) : undefined;
+}
 
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
@@ -73,7 +60,7 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
  * ```ts
  * const ezccip = new EZCCIP({ signer: privateKey });
  * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
- * export default { fetch: ezccip.fetch };
+ * const { data } = await ezccip.handleRequest(sender, calldata);
  * ```
  *
  * @typeParam extra - Custom object passed with each request, given to handlers as their third argument.
@@ -82,18 +69,12 @@ export class EZCCIP<extra = undefined> {
 	readonly #signer: Signer | undefined;
 	readonly #protocol: Protocol | undefined;
 	readonly #ttl: number;
-	readonly #origin: Address | undefined;
-	readonly #parseOrigin: (url: URL) => Address | undefined;
-	readonly #hooks: RequestHooks;
 	readonly #handlers = new Map<Hex, Handler<any, extra>>();
 
-	constructor({ signer, protocol, ttl = 60, origin, parseOrigin, onResponse, onError }: EZCCIPOptions = {}) {
+	constructor({ signer, protocol, ttl = 60 }: EZCCIPOptions = {}) {
 		this.#signer = signer ? toSigner(signer) : undefined;
 		this.#protocol = protocol && checkProtocol(protocol);
 		this.#ttl = checkTTL(ttl);
-		this.#origin = origin === undefined ? undefined : checkOrigin(origin);
-		this.#parseOrigin = parseOrigin ?? ((url) => originFromPath(url.pathname));
-		this.#hooks = { onResponse, onError };
 	}
 
 	/** Address of the default signer. */
@@ -168,35 +149,41 @@ export class EZCCIP<extra = undefined> {
 	}
 
 	/**
-	 * Produces an [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) response.
+	 * Answers an [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request.
+	 * Throws a {@link CCIPReadError} (with an HTTP status) for bad input, or whatever a handler throws.
 	 *
 	 * @example
 	 * ```ts
-	 * const { sender, data } = await request.json();
-	 * const { data: response, context } = await ezccip.handleRead({ sender, data });
+	 * const { sender, data: calldata } = await request.json();
+	 * const { data, context } = await ezccip.handleRequest(sender, calldata);
 	 * console.log(context.history.toString());
 	 * ```
 	 */
-	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType> {
-		const context = this.#createContext(parameters);
-		return { data: await this.#respond(context, parameters.extra as extra), context };
-	}
-
-	#createContext(parameters: Omit<HandleReadParameters, "extra">): Context {
-		const { sender, data } = parameters;
+	async handleRequest(
+		sender: Hex,
+		calldata: Hex,
+		...[options]: undefined extends extra
+			? [options?: HandleRequestOptions<extra>]
+			: [options: HandleRequestOptions<extra>]
+	): Promise<HandleRequestReturnType> {
 		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
-		if (!isHex(data) || data.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
-		const origin = parameters.origin ?? this.#origin ?? sender;
+		if (!isHex(calldata) || calldata.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
+		const origin = options?.origin ?? sender;
 		if (!isAddress(origin, { strict: false })) throw new CCIPReadError("invalid origin", { status: 400 });
 		const state: ReadState = {
 			sender: getAddress(sender),
-			request: parameters.request,
 			origin: getAddress(origin),
-			protocol: parameters.protocol ? checkProtocol(parameters.protocol) : this.#protocol,
-			signer: parameters.signer ? toSigner(parameters.signer) : this.#signer,
-			ttl: parameters.ttl === undefined ? this.#ttl : checkTTL(parameters.ttl),
+			protocol: options?.protocol ? checkProtocol(options.protocol) : this.#protocol,
+			signer: options?.signer ? toSigner(options.signer) : this.#signer,
+			ttl: options?.ttl === undefined ? this.#ttl : checkTTL(options.ttl),
 		};
-		return new Context(state, data.toLowerCase() as Hex);
+		const context = new Context(state, calldata.toLowerCase() as Hex);
+		try {
+			return { data: await this.#respond(context, options?.extra as extra), context };
+		} catch (error) {
+			if (error && typeof error === "object") ERROR_CONTEXTS.set(error, context);
+			throw error;
+		}
 	}
 
 	async #respond(ctx: Context, extra: extra): Promise<Hex> {
@@ -239,55 +226,4 @@ export class EZCCIP<extra = undefined> {
 			throw err;
 		}
 	}
-
-	/**
-	 * Handles an HTTP request: `POST {sender, data}` or `GET .../{sender}/{data}.json`.
-	 * Responds with `{data}`, or `{message}` and an HTTP status. CORS is enabled unless `cors: false`.
-	 * Hooks passed here run after the instance hooks.
-	 */
-	async handleRequest(
-		request: Request,
-		...[options]: undefined extends extra
-			? [options?: HandleRequestOptions<extra>]
-			: [options: HandleRequestOptions<extra>]
-	): Promise<Response> {
-		const cors = options?.cors !== false;
-		const headers = cors ? CORS_HEADERS : undefined;
-		if (request.method === "OPTIONS" && cors) {
-			return new Response(null, {
-				status: 204,
-				headers: {
-					...CORS_HEADERS,
-					"access-control-allow-methods": "GET, POST, OPTIONS",
-					"access-control-allow-headers": "*",
-				},
-			});
-		}
-		const url = new URL(request.url);
-		const hooks = [this.#hooks, options];
-		let context: Context | undefined;
-		let data: Hex;
-		try {
-			const { sender, data: calldata } = await parseCCIPReadRequest(request);
-			context = this.#createContext({ sender, data: calldata, origin: this.#parseOrigin(url), request });
-			data = await this.#respond(context, options?.extra as extra);
-		} catch (error) {
-			const status = error instanceof CCIPReadError ? error.status : 500;
-			for (const x of hooks) callHook(x?.onError, { request, url, error, status, context });
-			return Response.json({ message: publicErrorMessage(error) }, { status, headers });
-		}
-		for (const x of hooks) callHook(x?.onResponse, { request, url, data, context });
-		return Response.json({ data }, { headers });
-	}
-
-	/**
-	 * Fetch handler, bound to this instance. Only available when `extra` is optional.
-	 *
-	 * @example
-	 * ```ts
-	 * Bun.serve({ port: 8000, fetch: ezccip.fetch });
-	 * export default { fetch: ezccip.fetch };
-	 * ```
-	 */
-	readonly fetch = ((request: Request) => this.handleRequest(request, {} as never)) as FetchHandler<extra>;
 }

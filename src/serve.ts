@@ -1,6 +1,6 @@
 /**
  * Quick-start server using `node:http`: works on Node, Bun, and Deno.
- * To use your own server, pass {@link EZCCIP.fetch} to it instead.
+ * For fetch-based runtimes, see {@link createFetchHandler}.
  * @module
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -9,23 +9,33 @@ import { generatePrivateKey } from "viem/accounts";
 import type { GetRecord } from "./ens/ensip10.js";
 import { CCIPReadError } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
+import {
+	answer,
+	type CCIPReadRequest,
+	CORS_HEADERS,
+	type HTTPOptions,
+	logAnswer,
+	PREFLIGHT_HEADERS,
+	parseCCIPReadBody,
+	parseCCIPReadPath,
+} from "./http.js";
 
 /** Largest request body accepted, in bytes. */
 const MAX_BODY_SIZE = 1 << 20;
 
-export type ServeOptions = {
+export type ServeOptions<extra = undefined> = HTTPOptions & {
 	/** Port to listen on. (default: random open port) */
 	port?: number;
 	/** Interface to listen on. (default: all) */
 	hostname?: string;
 	/** Log startup, every response, every error, and shutdown with `console.log`, prefixed by the date. (default: true) */
 	log?: boolean;
-	/** Add CORS headers and answer `OPTIONS` preflight requests. (default: true) */
-	cors?: boolean;
-};
+} & (undefined extends extra
+		? { extra?: ((req: IncomingMessage) => extra) | undefined }
+		: { extra: (req: IncomingMessage) => extra });
 
-export type EZCCIPServer = {
-	readonly ezccip: EZCCIP;
+export type EZCCIPServer<extra = undefined> = {
+	readonly ezccip: EZCCIP<extra>;
 	readonly server: Server;
 	readonly port: number;
 	/** eg. `http://localhost:8016` */
@@ -45,6 +55,8 @@ export type EZCCIPServer = {
  * `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`,
  * signed with a random key unless `signer` is set.
  *
+ * Answers `POST {sender, data}` and `GET .../{sender}/{data}.json` with `{data}`, or `{message}` and an HTTP status.
+ *
  * @example
  * ```ts
  * import { serveEZCCIP } from "@namestone/ezccip/serve";
@@ -54,46 +66,40 @@ export type EZCCIPServer = {
  *
  * // minimal: fixed text() for any name
  * await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
+ *
+ * // give handlers the client's IP
+ * const ezccip = new EZCCIP<{ ip?: string }>();
+ * await serveEZCCIP(ezccip, { extra: (req) => ({ ip: req.socket.remoteAddress }) });
  * ```
  */
-export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;
+export function serveEZCCIP<extra = undefined>(
+	ezccip: EZCCIP<extra>,
+	...[options]: undefined extends extra ? [options?: ServeOptions<extra>] : [options: ServeOptions<extra>]
+): Promise<EZCCIPServer<extra>>;
 export function serveEZCCIP(resolve: GetRecord, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
 export async function serveEZCCIP(
-	arg: EZCCIP | GetRecord,
-	options: ServeOptions & EZCCIPOptions = {},
-): Promise<EZCCIPServer> {
+	arg: EZCCIP<any> | GetRecord,
+	options: ServeOptions<any> & EZCCIPOptions = {},
+): Promise<EZCCIPServer<any>> {
 	const ezccip =
 		arg instanceof EZCCIP
 			? arg
 			: new EZCCIP({ ...options, signer: options.signer ?? generatePrivateKey() }).enableENSIP10({ resolve: arg });
 	const { port = 0, hostname, log = true, cors = true } = options;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
+	const headers = cors ? CORS_HEADERS : {};
 
 	const server = createServer(async (req, res) => {
-		const ip = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
-		try {
-			const request = await toRequest(req);
-			const response = await ezccip.handleRequest(request, {
-				cors,
-				onResponse: ({ url, context }) => print?.(ip, url.pathname, context.history.toString()),
-				onError: ({ url, error, status, context }) =>
-					print?.(
-						ip,
-						request.method,
-						url.pathname,
-						status,
-						...(context ? [context.history.toString()] : []),
-						// stack trace for unexpected errors
-						status >= 500 && !(error instanceof CCIPReadError) ? error : error instanceof Error ? error.message : error,
-					),
-			});
-			await sendResponse(res, response);
-		} catch (error) {
-			// aborted, malformed, or oversized request
-			print?.(ip, req.method, req.url, error);
-			if (!res.headersSent) res.statusCode = error instanceof CCIPReadError ? error.status : 400;
-			res.end();
+		const url = new URL(req.url ?? "/", "http://localhost");
+		if (req.method === "OPTIONS" && cors) {
+			res.writeHead(204, PREFLIGHT_HEADERS).end();
+			return;
 		}
+		const { extra } = options;
+		const getExtra = extra && (() => extra(req));
+		const result = await answer(ezccip, url, () => readRequest(req, url), options, getExtra);
+		if (log) logAnswer(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress, req.method, url, result);
+		sendJSON(res, result.status, result.body, headers);
 	});
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);
@@ -134,38 +140,29 @@ export async function serveEZCCIP(
 	};
 }
 
-/** Converts a `node:http` request into a fetch `Request`. */
-async function toRequest(req: IncomingMessage): Promise<Request> {
-	const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
-	const headers = new Headers();
-	for (const [key, value] of Object.entries(req.headers)) {
-		if (Array.isArray(value)) {
-			for (const x of value) headers.append(key, x);
-		} else if (value !== undefined) {
-			headers.set(key, value);
+/** Reads `{sender, data}` from a `node:http` request. */
+async function readRequest(req: IncomingMessage, url: URL): Promise<CCIPReadRequest> {
+	switch (req.method) {
+		case "GET":
+			return parseCCIPReadPath(url.pathname);
+		case "POST": {
+			const tooLarge = new CCIPReadError("request too large", { status: 413 });
+			if (Number(req.headers["content-length"]) > MAX_BODY_SIZE) throw tooLarge;
+			const chunks: Uint8Array[] = [];
+			let size = 0;
+			for await (const chunk of req as AsyncIterable<Uint8Array>) {
+				size += chunk.length;
+				if (size > MAX_BODY_SIZE) throw tooLarge;
+				chunks.push(chunk);
+			}
+			return parseCCIPReadBody(Buffer.concat(chunks).toString("utf8"));
 		}
+		default:
+			throw new CCIPReadError("unsupported http method", { status: 405 });
 	}
-	let body: Uint8Array<ArrayBuffer> | undefined;
-	if (req.method !== "GET" && req.method !== "HEAD") {
-		const tooLarge = new CCIPReadError("request too large", { status: 413 });
-		if (Number(req.headers["content-length"]) > MAX_BODY_SIZE) throw tooLarge;
-		const chunks: Uint8Array[] = [];
-		let size = 0;
-		for await (const chunk of req as AsyncIterable<Uint8Array>) {
-			size += chunk.length;
-			if (size > MAX_BODY_SIZE) throw tooLarge;
-			chunks.push(chunk);
-		}
-		body = new Uint8Array(Buffer.concat(chunks));
-	}
-	return new Request(url, { method: req.method, headers, body });
 }
 
-/** Writes a fetch `Response` to a `node:http` response. */
-async function sendResponse(res: ServerResponse, response: Response) {
-	res.statusCode = response.status;
-	response.headers.forEach((value, key) => {
-		res.setHeader(key, value);
-	});
-	res.end(Buffer.from(await response.arrayBuffer()));
+function sendJSON(res: ServerResponse, status: number, body: unknown, headers: Record<string, string>) {
+	const buf = Buffer.from(JSON.stringify(body));
+	res.writeHead(status, { ...headers, "content-type": "application/json", "content-length": buf.length }).end(buf);
 }

@@ -16,8 +16,6 @@ export interface CallContext {
 	readonly history: History;
 	/** Contract that reverted with `OffchainLookup`. */
 	readonly sender: Address;
-	/** The HTTP request, if any. */
-	readonly request: Request | undefined;
 	/** Contract that will verify the response. */
 	get origin(): Address;
 	set origin(origin: Address);
@@ -34,7 +32,6 @@ export interface CallContext {
 /** Request-wide state, shared by every context of a request. */
 export type ReadState = {
 	readonly sender: Address;
-	readonly request: Request | undefined;
 	origin: Address;
 	/** `undefined` means: `"ens"` with a signer, otherwise `"raw"`. */
 	protocol: Protocol | undefined;
@@ -66,9 +63,6 @@ export class Context implements CallContext {
 
 	get sender(): Address {
 		return this.#state.sender;
-	}
-	get request(): Request | undefined {
-		return this.#state.request;
 	}
 	get origin(): Address {
 		return this.#state.origin;
