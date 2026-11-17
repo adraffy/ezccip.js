@@ -21,15 +21,8 @@ import {
 } from "viem";
 import { generatePrivateKey } from "viem/accounts";
 import { packetToBytes } from "viem/ens";
-import {
-	type CallContext,
-	CCIPReadError,
-	EZCCIP,
-	type HandlerFunction,
-	MULTICALL,
-	RESOLVE,
-	UNREACHABLE_NAME,
-} from "../src/index.js";
+import { MULTICALL, RESOLVE, UNREACHABLE_NAME } from "../src/ens/abi.js";
+import { type CallContext, CCIPReadError, EZCCIP, type HandlerFunction } from "../src/index.js";
 
 const sender = getAddress("0x0000000000000000000000000000000000000001");
 const SOLIDITY_ERROR = parseAbiItem("error Error(string)");
@@ -139,9 +132,11 @@ test("findHandler", () => {
 	expect(ezccip.findHandler("g(uint256,uint256)")?.selector).toBe(selector);
 	expect(ezccip.findHandler(selector)?.selector).toBe(selector);
 	expect(ezccip.findHandler(fn)?.selector).toBe(selector);
-	expect(ezccip.findHandler("multicall")).toBeDefined();
 	expect(ezccip.findHandler("nope")).toBeUndefined();
-	expect(ezccip.handlers.map((x) => x.signature)).toEqual(["multicall(bytes[])", "g(uint256,uint256)"]);
+	// multicall is built in, not a handler
+	expect(ezccip.findHandler("multicall")).toBeUndefined();
+	expect(ezccip.handlers.map((x) => x.signature)).toEqual(["g(uint256,uint256)"]);
+	expect(() => ezccip.addHandler(MULTICALL, () => [[]])).toThrow("multicall is built in");
 });
 
 describe("results", () => {
@@ -173,7 +168,7 @@ describe("handleRead", () => {
 		const ezccip = new EZCCIP({ ttl: 5 });
 		const fn = parseAbiItem("function f() returns (address, address)");
 		ezccip.addHandler(fn, (_, ctx) => {
-			expect(ctx.calldata).toBe(ctx.history.calldata!);
+			expect(ctx.calldata).toBe(encode(fn));
 			expect(ctx.ttl).toBe(5);
 			expect(ctx.protocol).toBe("raw");
 			expect(ctx.signer).toBeUndefined();
@@ -217,6 +212,23 @@ describe("handleRead", () => {
 		const { context } = await ezccip.handleRead({ sender, data: handler.selector });
 		expect(context.origin).toBe(origin);
 		expect(() => new EZCCIP({ origin: "0x1234" })).toThrow("invalid origin");
+	});
+
+	test("validation", async () => {
+		expect(() => new EZCCIP({ ttl: Number.NaN })).toThrow("invalid ttl");
+		expect(() => new EZCCIP({ ttl: -1 })).toThrow("invalid ttl");
+		const ezccip = new EZCCIP();
+		const hex = ezccip.addHandler("function hex() returns (string)", (() => "hello") as never);
+		const origin = ezccip.addHandler("function origin()", (_, ctx) => {
+			ctx.origin = "0xbad";
+		});
+		const ttl = ezccip.addHandler("function ttl()", (_, ctx) => {
+			ctx.ttl = -1;
+		});
+		expect(ezccip.handleRead({ sender, data: hex.selector })).rejects.toThrow("expected hex");
+		expect(ezccip.handleRead({ sender, data: origin.selector })).rejects.toThrow("invalid origin");
+		expect(ezccip.handleRead({ sender, data: ttl.selector })).rejects.toThrow("invalid ttl");
+		expect(ezccip.handleRead({ sender, data: ttl.selector, ttl: Number.NaN })).rejects.toThrow("invalid ttl");
 	});
 
 	test("fractional ttl", async () => {

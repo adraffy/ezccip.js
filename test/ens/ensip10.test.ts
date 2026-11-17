@@ -10,14 +10,8 @@ import {
 	parseAbiItem,
 	toFunctionSelector,
 } from "viem";
-import {
-	COIN_TYPE_DEFAULT,
-	COIN_TYPE_ETH,
-	type ENSRecord,
-	History,
-	processENSIP10,
-	UNSUPPORTED_RESOLVER_PROFILE,
-} from "../../src/index.js";
+import { UNSUPPORTED_RESOLVER_PROFILE } from "../../src/ens/abi.js";
+import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, type ENSRecord, History, processENSIP10 } from "../../src/index.js";
 
 const NODE = pad("0x");
 
@@ -154,7 +148,7 @@ describe("profiles", () => {
 	});
 	test("no record", async () => expect(await query(undefined, text, [NODE, "name"])).toBe(""));
 	test("multicall", async () => {
-		const history = new History();
+		const history = new History("0x");
 		const calls = [
 			encodeFunctionData({ abi: [text], args: [NODE, "name"] }),
 			encodeFunctionData({ abi: [name], args: [NODE] }),

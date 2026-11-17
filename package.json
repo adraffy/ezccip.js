@@ -30,7 +30,8 @@
 		"test": "bun test",
 		"start": "bun run scripts/demo.ts",
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
-		"prepublishOnly": "bun run check && bun run lint && bun test && bun run build"
+		"prepublishOnly": "bun run check && bun run lint && bun test && bun run build",
+		"smoke": "bun run build && node scripts/smoke.mjs"
 	},
 	"exports": {
 		".": {
@@ -47,6 +48,9 @@
 		"./src"
 	],
 	"sideEffects": false,
+	"engines": {
+		"node": ">=20"
+	},
 	"dependencies": {
 		"abitype": "^1.2.3"
 	},

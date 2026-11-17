@@ -1,21 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { bytesToHex } from "viem";
 import { packetToBytes } from "viem/ens";
-import { CCIPReadError, dnsDecode } from "../../src/index.js";
+import { CCIPReadError, dnsDecodeLabels, dnsDecodeName } from "../../src/index.js";
 
-describe("dnsDecode", () => {
+describe("dnsDecodeName / dnsDecodeLabels", () => {
 	for (const name of ["raffy.eth", "a.b.c.d.e", "💩.eth", ""]) {
 		test(JSON.stringify(name), () => {
 			const bytes = packetToBytes(name);
-			expect(dnsDecode(bytes).join(".")).toBe(name);
-			expect(dnsDecode(bytesToHex(bytes)).join(".")).toBe(name);
+			expect(dnsDecodeName(bytes)).toBe(name);
+			expect(dnsDecodeName(bytesToHex(bytes))).toBe(name);
+			expect(dnsDecodeLabels(bytes)).toEqual(name ? name.split(".") : []);
 		});
 	}
 	test("invalid", () => {
-		expect(() => dnsDecode("0x")).toThrow(CCIPReadError);
-		expect(() => dnsDecode("0x0100")).toThrow(); // overflow
-		expect(() => dnsDecode("0x000000")).toThrow(); // trailing
-		expect(() => dnsDecode("0x012e00")).toThrow(); // "."
-		expect(() => dnsDecode("0x01ff00")).toThrow(); // invalid utf8
+		expect(() => dnsDecodeLabels("0x")).toThrow(CCIPReadError);
+		expect(() => dnsDecodeLabels("0x0100")).toThrow(); // overflow
+		expect(() => dnsDecodeLabels("0x000000")).toThrow(); // trailing
+		expect(() => dnsDecodeLabels("0x012e00")).toThrow(); // "."
+		expect(() => dnsDecodeLabels("0x01ff00")).toThrow(); // invalid utf8
 	});
 });

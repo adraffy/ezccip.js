@@ -1,9 +1,11 @@
-import { bytesToHex, type Hex } from "viem";
+import { bytesToHex, type Hex, isHex } from "viem";
 import type { BytesLike } from "./types.js";
 
-/** Converts bytes-like to lowercase hex. */
+/** Converts bytes-like to lowercase hex. Throws on strings that aren't hex. */
 export function bytesLikeToHex(value: BytesLike): Hex {
-	return typeof value === "string" ? (value.toLowerCase() as Hex) : bytesToHex(value);
+	if (typeof value !== "string") return bytesToHex(value);
+	if (!isHex(value, { strict: true })) throw new TypeError(`expected hex: ${String(value).slice(0, 20)}`);
+	return value.toLowerCase() as Hex;
 }
 
 export function isBytesLike(value: unknown): value is BytesLike {
@@ -23,6 +25,12 @@ export function getSelector(calldata: Hex): Hex {
 /** Returns calldata without its selector. */
 export function stripSelector(calldata: Hex): Hex {
 	return `0x${calldata.slice(10)}`;
+}
+
+/** Validates a response lifetime: a finite, non-negative number of seconds. */
+export function checkTTL(ttl: number): number {
+	if (typeof ttl !== "number" || !Number.isFinite(ttl) || ttl < 0) throw new TypeError(`invalid ttl: ${ttl}`);
+	return ttl;
 }
 
 /** Converts a unicode string to a log-safe ascii string with `{XX}` escapes. */

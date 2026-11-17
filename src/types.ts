@@ -1,6 +1,7 @@
 import type { AbiParametersToPrimitiveTypes } from "abitype";
-import type { AbiFunction, Hex } from "viem";
+import type { AbiFunction, Address, Hex } from "viem";
 import type { CallContext } from "./context.js";
+import type { Protocol, SignerLike } from "./signing.js";
 
 export type Awaitable<T> = T | PromiseLike<T>;
 
@@ -39,3 +40,15 @@ export type Handler<abiFunction extends AbiFunction = AbiFunction, extra = undef
 
 /** `extra` is optional when it may be `undefined`, otherwise required. */
 export type ExtraParameter<extra> = undefined extends extra ? { extra?: extra } : { extra: extra };
+
+/** How a response is signed. Set as defaults on `EZCCIP`, per request in `handleRead()`, or by handlers on `ctx`. */
+export type ResponseOptions = {
+	/** Contract that will verify the response. (default: `sender`) */
+	origin?: Address | undefined;
+	/** (default: `"ens"` with a signer, otherwise `"raw"`) */
+	protocol?: Protocol | undefined;
+	/** A private key or eg. a viem `LocalAccount`. */
+	signer?: SignerLike | undefined;
+	/** Response lifetime in seconds. (default: 60) */
+	ttl?: number | undefined;
+};

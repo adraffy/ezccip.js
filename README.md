@@ -2,7 +2,7 @@
 
 Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler for ENS and arbitrary functions.
 
-`bun add @namestone/ezccip viem` / `npm i @namestone/ezccip viem` [&check;](https://www.npmjs.com/package/@namestone/ezccip)
+`bun add @namestone/ezccip viem` / `npm i @namestone/ezccip viem` (Node 20+) [&check;](https://www.npmjs.com/package/@namestone/ezccip)
 
 - TypeScript, ESM-only, built on [viem](https://viem.sh) (peer dependency)
 - handler arguments and return values are typed from the ABI
@@ -71,7 +71,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 - `args` &mdash; decoded arguments
 - `ctx` &mdash; a `CallContext`, one per call:
   - `calldata` &mdash; this call's calldata
-  - `history` &mdash; this call's log entry: set `show` or `name` to change how it's logged
+  - `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
   - `sender`, `request` (the HTTP `Request`, if any) &mdash; shared by the whole request
   - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Also shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response. The protocol is chosen after handlers run, so setting `ctx.signer` alone switches the default to `"ens"`
 - `extra` &mdash; your custom object for this request (eg. `{ env }`), see [Serving with fetch](#serving-with-fetch); `undefined` unless you declare `EZCCIP<Extra>`
@@ -86,7 +86,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 #### Multicall
 
-`multicall(bytes[])` is built in and answered only as the outer call; its subcalls cannot be `multicall()`. `resolve()` may contain one `multicall()` of its own:
+`multicall(bytes[])` is built in (it isn't a handler, so it can't be replaced) and is answered only as the outer call; its subcalls cannot be `multicall()`. `resolve()` may contain one `multicall()` of its own:
 
 - `multicall([f(), g()])`
 - `multicall([resolve(name, ...), ...])`
@@ -95,7 +95,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### serveEZCCIP()
 
-Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 resolver given as one object of `resolve`, ENSIP-10 options, `EZCCIP` options, and server options. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable.
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 resolver given as one object of `resolve`, ENSIP-10 options, `EZCCIP` options, and server options. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable, and `cors: false` to turn off CORS headers.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";
@@ -119,7 +119,7 @@ await using ccip = await serveEZCCIP({ resolve: () => ({ text: () => "Raffy" }),
 - `POST {sender, data}` &rarr; `{data}`
 - `GET .../{sender}/{data}.json` &rarr; `{data}`
 - errors &rarr; `{message}` with HTTP status
-- CORS enabled
+- CORS enabled (pass `cors: false` to `handleRequest()` to turn it off)
 
 ```ts
 // Bun
@@ -206,6 +206,7 @@ bun test
 bun run check  # typecheck
 bun run lint   # biome
 bun run build  # dist/
+bun run smoke  # build, then run dist/ on Node
 ```
 
 ### Migrating from 0.1
@@ -225,6 +226,7 @@ bun run build  # dist/
 - `log` / `formatError` options &rarr; `onResponse` / `onError` hooks (`serveEZCCIP` logs by default)
 - `resolvers` option removed &mdash; use `parseOrigin` or `origin`
 - `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
-- `History`: `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`; no recursion `level`
+- `History` only builds the log line: set `name` or `show` (an array, or `false`); `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`
 - `ENSRecord.ABI(contentTypes)` receives a `bigint`
-- `labels_from_dns_encoded` &rarr; `dnsDecode`, `error_with` &rarr; `CCIPReadError`
+- `labels_from_dns_encoded` &rarr; `dnsDecodeLabels` (or `dnsDecodeName` for the joined name), `error_with` &rarr; `CCIPReadError`
+- `RESOLVE_ABI` &rarr; `resolverAbi`; `multicall` is no longer a handler (`findHandler("multicall")` is `undefined`)

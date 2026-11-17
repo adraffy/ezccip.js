@@ -5,7 +5,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ENSIP10Parameters } from "./ens/ensip10.js";
+import type { ENSIP10Options, ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
 
@@ -16,7 +16,17 @@ export type ServeOptions = {
 	hostname?: string;
 	/** Log startup, every response, every error, and shutdown with `console.log`, prefixed by the date. (default: true) */
 	log?: boolean;
+	/** Add CORS headers and answer `OPTIONS` preflight requests. (default: true) */
+	cors?: boolean;
 };
+
+// every key of ENSIP10Options, checked by the compiler
+const ENSIP10_KEYS = Object.keys({
+	multicall: 0,
+	defaultAddress: 0,
+	throwUnsupported: 0,
+	unreachableAsEmpty: 0,
+} satisfies Record<keyof ENSIP10Options, 0>) as (keyof ENSIP10Options)[];
 
 export type EZCCIPServer = {
 	readonly ezccip: EZCCIP;
@@ -61,22 +71,18 @@ export async function serveEZCCIP(
 	if (arg instanceof EZCCIP) {
 		ezccip = arg;
 	} else {
-		const {
-			port,
-			hostname,
-			log,
-			resolve,
-			multicall,
-			defaultAddress,
-			throwUnsupported,
-			unreachableAsEmpty,
-			...options
-		} = arg;
-		ezccip = new EZCCIP(options);
-		ezccip.enableENSIP10({ resolve, multicall, defaultAddress, throwUnsupported, unreachableAsEmpty });
-		serveOptions = { port, hostname, log };
+		const { port, hostname, log, cors, resolve, ...rest } = arg;
+		const ensip10: ENSIP10Options = {};
+		const options: Record<string, unknown> = { ...rest };
+		for (const key of ENSIP10_KEYS) {
+			(ensip10 as Record<string, unknown>)[key] = options[key];
+			delete options[key];
+		}
+		ezccip = new EZCCIP(options as EZCCIPOptions);
+		ezccip.enableENSIP10({ resolve, ...ensip10 });
+		serveOptions = { port, hostname, log, cors };
 	}
-	const { port = 0, hostname, log = true } = serveOptions;
+	const { port = 0, hostname, log = true, cors = true } = serveOptions;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 
 	const server = createServer(async (req, res) => {
@@ -84,6 +90,7 @@ export async function serveEZCCIP(
 		try {
 			const request = await toRequest(req);
 			const response = await ezccip.handleRequest(request, {
+				cors,
 				onResponse: ({ url, context }) => print?.(ip, url.pathname, context.history.toString()),
 				onError: ({ url, error, status, context }) =>
 					print?.(

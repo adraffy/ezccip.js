@@ -2,46 +2,41 @@ import type { Hex } from "viem";
 import { asciiize } from "./utils.js";
 
 /**
- * Log entry for one call. Forms a tree:
- * `multicall()` subcalls are {@link children}, and `resolve()` is followed by its {@link inner} call.
+ * Builds a one-line description of what was requested and how it was answered, for logging.
+ * One per call: `multicall()` subcalls are {@link children}, and the call inside `resolve()` is {@link inner}.
  *
- * `toString()` gives a compact description, eg. `multicall()^2 [resolve(raffy.eth).text(name) f(1)<error>]`.
+ * eg. `multicall()^2 [resolve(raffy.eth).text(name) f(1)<error>]`
  */
 export class History {
-	/** Calldata of this call. */
-	calldata?: Hex | undefined;
-	/** Function name. Can be overridden for logging. */
-	name?: string | undefined;
-	/** Decoded arguments. */
-	args?: readonly unknown[] | undefined;
-	/** Logged instead of `args`: a value, an array, a lazy function, or `false` to hide. */
-	show?: unknown;
+	/** Function name, or the selector until it's known. Handlers may rename it. */
+	name: string;
+	/** Logged arguments. Handlers may replace them, or set `false` to hide them. */
+	show: readonly unknown[] | false = [];
 	error?: unknown;
-	/** `multicall()` subcalls. */
 	readonly children: History[] = [];
-	/** Call answered inside this one, eg. `text()` inside `resolve()`. */
 	inner?: History | undefined;
 
+	constructor(calldata: Hex) {
+		this.name = `<${calldata.slice(0, 10)}>`;
+	}
+
 	/** Adds a `multicall()` subcall. */
-	addChild(): History {
-		const child = new History();
+	addChild(calldata: Hex): History {
+		const child = new History(calldata);
 		this.children.push(child);
 		return child;
 	}
 
-	/** Sets the call answered inside this one. */
-	addInner(): History {
-		this.inner = new History();
+	/** Sets the call answered inside this one, eg. `text()` inside `resolve()`. */
+	addInner(calldata: Hex): History {
+		this.inner = new History(calldata);
 		return this.inner;
 	}
 
 	toString(): string {
-		const { calldata, name, error, children, inner } = this;
-		let desc = name ?? `<${calldata ? calldata.slice(0, 10) : "null"}>`;
-		let show = this.show === undefined ? this.args : this.show;
-		if (typeof show === "function") show = show();
-		const shown = show === undefined || show === null || show === false ? [] : Array.isArray(show) ? show : [show];
-		desc += `(${shown.map((x) => (typeof x === "string" ? asciiize(x) : String(x))).join(",")})`;
+		const { name, show, error, children, inner } = this;
+		const args = show ? show.map((x) => (typeof x === "string" ? asciiize(x) : String(x))) : [];
+		let desc = `${name}(${args.join(",")})`;
 		if (children.length) desc += `^${children.length} [${children.join(" ")}]`;
 		if (error !== undefined) desc += `<${error instanceof Error ? error.message : String(error)}>`;
 		if (inner) desc += `.${inner}`;

@@ -3,10 +3,10 @@ import { CCIPReadError } from "../errors.js";
 import type { BytesLike } from "../types.js";
 
 /**
- * Decodes a DNS-encoded name into its labels.
+ * Decodes a DNS-encoded name into its labels, eg. `["raffy", "eth"]`.
  * Inverse of viem's `packetToBytes()`.
  */
-export function dnsDecode(value: BytesLike): string[] {
+export function dnsDecodeLabels(value: BytesLike): string[] {
 	const v = typeof value === "string" ? hexToBytes(value) : value;
 	const decoder = new TextDecoder(undefined, { fatal: true });
 	const labels: string[] = [];
@@ -30,4 +30,9 @@ export function dnsDecode(value: BytesLike): string[] {
 		labels.push(label);
 	}
 	throw new CCIPReadError("invalid DNS-encoded name", { status: 400 });
+}
+
+/** Decodes a DNS-encoded name, eg. `"raffy.eth"`. */
+export function dnsDecodeName(value: BytesLike): string {
+	return dnsDecodeLabels(value).join(".");
 }

@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { decodeErrorResult, parseAbiItem } from "viem";
-import { CCIPReadError, encodeErrorString, publicErrorMessage } from "../src/index.js";
+import { encodeErrorString, publicErrorMessage } from "../src/errors.js";
+import { CCIPReadError } from "../src/index.js";
 import { asciiize } from "../src/utils.js";
 
 test("asciiize", () => {

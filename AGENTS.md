@@ -12,6 +12,7 @@ bun run format   # biome check --write (format + organize imports + safe fixes)
 bun test         # bun:test, includes type assertions via expectTypeOf / @ts-expect-error
 bun run build    # tsc -p tsconfig.build.json -> dist/ (ESM + .d.ts)
 bun run start    # scripts/demo.ts on :8016
+bun run smoke    # build, then run scripts/smoke.mjs against dist/ on Node
 ```
 
 Before finishing a change, run `bun run check && bun run lint && bun test`. If you touch exports, types, or imports in `src/`, also run `bun run build` and make sure `dist/*.d.ts` contains no `.ts` import specifiers.
@@ -36,14 +37,16 @@ src/
   http.ts       Request -> Response: parseCCIPReadRequest, originFromPath, handleRequest, hooks
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
-  errors.ts     CCIPReadError (carries HTTP status), encodeErrorString
+  errors.ts     CCIPReadError (carries HTTP status); publicErrorMessage, encodeErrorString (internal)
   serve.ts      serveEZCCIP(): node:http quick server (Node, Bun, Deno), separate export "@namestone/ezccip/serve"
   utils.ts      small internal helpers (some re-exported, eg. asciiize)
   ens/
-    abi.ts      RESOLVE_ABI and its items (RESOLVE, MULTICALL, errors)
+    abi.ts      resolverAbi (public) and its SCREAMING_CASE items (internal)
     ensip10.ts  ENSRecord, processENSIP10, createENSIP10Handler
     coin-type.ts, dns.ts
-scripts/demo.ts demo server
+scripts/demo.ts   demo server
+scripts/smoke.mjs runs dist/ on any runtime (CI runs it on Node 20/22/24)
+.github/workflows/ci.yml  bun: check, lint, test, build, smoke; node: build, smoke
 test/           mirrors src/ (test/ens/* for src/ens/*)
 ```
 
@@ -51,7 +54,10 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 
 - **Relative imports use `.js` extensions** (`import { x } from "./http.js"`), even though the files are `.ts`. `tsc` does not rewrite `.ts` specifiers inside emitted `.d.ts` files, so `.ts` imports break consumers.
 - **Types come from the ABI.** `addHandler()` takes one function (a human-readable signature, with or without the `function` prefix, or a viem `AbiFunction`), and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
-- **Handler signature** is `(args, ctx, extra) => result`. `ctx` is a `CallContext`, created per call, that reads and writes one request-wide `ReadState`: `origin`, `protocol`, `signer`, and `ttl` are intentionally mutable and shared by every call in the request. `ctx.calldata` and `ctx.history` belong to that call only. Nested calls get their context from `ctx.nested(calldata, history)`.
+- **Handler signature** is `(args, ctx, extra) => result`. `CallContext` is a public *interface*; the class is the internal `Context`, created per call, which reads and writes one request-wide `ReadState`: `origin`, `protocol`, `signer`, and `ttl` are intentionally mutable and shared by every call in the request, and their setters validate. `ctx.calldata` and `ctx.history` belong to that call only. Subcalls get their context from `Context.child(calldata)`.
+- **`multicall`** is handled in `#call`, not registered as a handler, so it can't be replaced and isn't listed in `handlers`.
+- **`History`** only exists to build the log line: `name`, `show` (`readonly unknown[] | false`), `error`, `children`, `inner`. Don't add fields that aren't printed.
+- **Public exports** are listed explicitly in `src/index.ts`. Keep internal helpers (eg. `encodeErrorString`, `formatCoinType`, the ABI items) out of it; tests may import internal modules directly.
 - **ENSIP-10 answers** are built from typed ABI items in `src/ens/abi.ts` via `profile(abiItem, answer)`, so `args` and results are type-checked. Add new profiles the same way. EVM `addr()` values must be 20 bytes or empty (`toEVMAddress`).
 - **Object parameters**: `enableENSIP10({ resolve, ...options })`, `serveEZCCIP({ resolve, ... })`, and the signing functions take a single object.
 - **Multicall** is only answered as the outer call; subcalls cannot be `multicall()`. Inside `resolve()`, `processENSIP10` allows one `multicall()` at the top of the inner data, and its subcalls cannot be `multicall()` either. There is no recursion limit option.

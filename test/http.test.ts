@@ -10,7 +10,8 @@ import {
 	toFunctionSelector,
 } from "viem";
 import { packetToBytes } from "viem/ens";
-import { EZCCIP, type EZCCIPOptions, originFromPath, parseCCIPReadRequest, RESOLVE } from "../src/index.js";
+import { RESOLVE } from "../src/ens/abi.js";
+import { EZCCIP, type EZCCIPOptions, originFromPath, parseCCIPReadRequest } from "../src/index.js";
 
 const SENDER = "0x0000000000000000000000000000000000000001";
 const ORIGIN = "0x0000000000000000000000000000000000000002";
@@ -111,6 +112,20 @@ describe("errors", () => {
 		const res = await make().fetch(new Request("http://localhost/", { method: "PUT" }));
 		expect(res.status).toBe(405);
 	});
+});
+
+test("cors: false", async () => {
+	const ezccip = make();
+	const request = (method: string) =>
+		new Request("http://localhost/", {
+			method,
+			body: method === "POST" ? JSON.stringify({ sender: SENDER, data: GET_ORIGIN }) : undefined,
+		});
+	const preflight = await ezccip.handleRequest(request("OPTIONS"), { cors: false });
+	expect(preflight.status).toBe(405);
+	const res = await ezccip.handleRequest(request("POST"), { cors: false });
+	expect(res.status).toBe(200);
+	expect(res.headers.get("access-control-allow-origin")).toBeNull();
 });
 
 test("CORS", async () => {

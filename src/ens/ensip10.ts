@@ -31,7 +31,7 @@ import {
 	UNSUPPORTED_RESOLVER_PROFILE,
 } from "./abi.js";
 import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, chainFromCoinType, formatCoinType } from "./coin-type.js";
-import { dnsDecode } from "./dns.js";
+import { dnsDecodeName } from "./dns.js";
 
 type Maybe<T> = Awaitable<T | null | undefined>;
 
@@ -66,7 +66,7 @@ export type ProcessENSIP10Options = {
 	defaultAddress?: boolean;
 	/** Throw a `CCIPReadError` (404) instead of returning `UnsupportedResolverProfile`. (default: false) */
 	throwUnsupported?: boolean;
-	/** Records how the calldata was answered. */
+	/** Log entry for this calldata. */
 	history?: History | undefined;
 };
 
@@ -90,7 +90,6 @@ async function answer(
 ): Promise<Hex> {
 	const { history } = options;
 	try {
-		if (history) history.calldata = calldata;
 		const selector = getSelector(calldata);
 		const profile = PROFILES.get(selector);
 		if (!profile || (profile.abiFunction === MULTICALL && (isSubcall || options.multicall === false))) {
@@ -112,7 +111,6 @@ async function answer(
 		}
 		if (history) {
 			history.name = abiFunction.name;
-			history.args = args;
 			history.show = args.slice(1); // drop namehash
 		}
 		const result = await answer(record, args as never, options);
@@ -143,7 +141,7 @@ const PROFILES = new Map<Hex, Profile>([
 		const { history } = options;
 		if (history) history.show = false;
 		const results = calls.map((call) =>
-			answer(record, call, { ...options, history: history?.addChild() }, true).catch(encodeErrorString),
+			answer(record, call, { ...options, history: history?.addChild(call) }, true).catch(encodeErrorString),
 		);
 		return [await Promise.all(results)];
 	}),
@@ -236,7 +234,7 @@ export function createENSIP10Handler<extra = undefined>({
 	...options
 }: ENSIP10Parameters<extra>): HandlerFunction<typeof RESOLVE, extra> {
 	return async ([dnsname, data], ctx, extra) => {
-		const name = dnsDecode(dnsname).join(".");
+		const name = dnsDecodeName(dnsname);
 		ctx.history.show = [name];
 		const record = await resolve(name, ctx, extra);
 		if (!record && !unreachableAsEmpty) {
@@ -244,6 +242,6 @@ export function createENSIP10Handler<extra = undefined>({
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}
 		// already encoded since: abi.decode(abi.encode(x)) == x
-		return processENSIP10(record, data, { ...options, history: ctx.history.addInner() });
+		return processENSIP10(record, data, { ...options, history: ctx.history.addInner(data) });
 	};
 }

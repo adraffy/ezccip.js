@@ -12,11 +12,10 @@ import {
 	toFunctionSelector,
 	toFunctionSignature,
 } from "viem";
-import { CallContext, defaultProtocol, type ReadState } from "./context.js";
+import { type CallContext, Context, defaultProtocol, type ReadState } from "./context.js";
 import { MULTICALL, RESOLVE } from "./ens/abi.js";
 import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError, encodeErrorString, publicErrorMessage } from "./errors.js";
-import { History } from "./history.js";
 import {
 	CORS_HEADERS,
 	callHook,
@@ -25,38 +24,27 @@ import {
 	parseCCIPReadRequest,
 	type RequestHooks,
 } from "./http.js";
-import { type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
-import type { BytesLike, ExtraParameter, Handler, HandlerFunction } from "./types.js";
-import { bytesLikeToHex, getSelector, stripSelector } from "./utils.js";
+import { type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
+import type { BytesLike, ExtraParameter, Handler, HandlerFunction, ResponseOptions } from "./types.js";
+import { bytesLikeToHex, checkTTL, getSelector, stripSelector } from "./utils.js";
 
-export type EZCCIPOptions = RequestHooks & {
-	/** Default signer: a private key or eg. a viem `LocalAccount`. */
-	signer?: SignerLike | undefined;
-	/** Default protocol. (default: `"ens"` with a signer, otherwise `"raw"`) */
-	protocol?: Protocol | undefined;
-	/** Default response lifetime in seconds. (default: 60) */
-	ttl?: number | undefined;
-	/** Default origin. (default: `sender`) */
-	origin?: Address | undefined;
-	/**
-	 * Extracts the origin from the URL of an HTTP request.
-	 * (default: the first `/0x{40}` path component, see {@link originFromPath})
-	 */
-	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
-};
+export type EZCCIPOptions = RequestHooks &
+	ResponseOptions & {
+		/**
+		 * Extracts the origin from the URL of an HTTP request.
+		 * (default: the first `/0x{40}` path component, see {@link originFromPath})
+		 */
+		parseOrigin?: ((url: URL) => Address | undefined) | undefined;
+	};
 
-export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> & {
-	sender: Hex;
-	/** Calldata from `OffchainLookup`. */
-	data: Hex;
-	/** Contract that will verify the response. (default: `origin` option, then `sender`) */
-	origin?: Address | undefined;
-	protocol?: Protocol | undefined;
-	signer?: SignerLike | undefined;
-	ttl?: number | undefined;
-	/** The HTTP request, if any. */
-	request?: Request | undefined;
-};
+export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> &
+	ResponseOptions & {
+		sender: Hex;
+		/** Calldata from `OffchainLookup`. */
+		data: Hex;
+		/** The HTTP request, if any. */
+		request?: Request | undefined;
+	};
 
 export type HandleReadReturnType = {
 	/** ABI-encoded response for EIP-3668. */
@@ -79,7 +67,8 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
  *
- * `multicall(bytes[])` is built in: it is only answered as the outer call, and its subcalls cannot be `multicall()`.
+ * `multicall(bytes[])` is built in (not a handler): it is only answered as the outer call,
+ * and its subcalls cannot be `multicall()`.
  *
  * @example
  * ```ts
@@ -103,17 +92,10 @@ export class EZCCIP<extra = undefined> {
 		if (origin !== undefined && !isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
 		this.#signer = signer ? toSigner(signer) : undefined;
 		this.#protocol = protocol;
-		this.#ttl = ttl;
+		this.#ttl = checkTTL(ttl);
 		this.#origin = origin && getAddress(origin);
 		this.#parseOrigin = parseOrigin ?? ((url) => originFromPath(url.pathname));
 		this.#hooks = { onResponse, onError };
-		this.addHandler(MULTICALL, async ([calls], ctx, extra) => {
-			ctx.history.show = false;
-			const results = calls.map((call) =>
-				this.#call(ctx.nested(call, ctx.history.addChild()), extra, true).catch(encodeErrorString),
-			);
-			return [await Promise.all(results)];
-		});
 	}
 
 	/** Address of the default signer. */
@@ -126,7 +108,7 @@ export class EZCCIP<extra = undefined> {
 		return this.#protocol ?? defaultProtocol(this.#signer);
 	}
 
-	/** All handlers, including the built-in `multicall`. */
+	/** All handlers. (`multicall` is built in, not a handler.) */
 	get handlers(): Handler<AbiFunction, extra>[] {
 		return [...this.#handlers.values()];
 	}
@@ -157,6 +139,7 @@ export class EZCCIP<extra = undefined> {
 			) as AbiFunction;
 		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
+		if (toFunctionSelector(abiFunction) === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
 		const handler = {
 			abiFunction,
 			selector: toFunctionSelector(abiFunction),
@@ -202,7 +185,7 @@ export class EZCCIP<extra = undefined> {
 		return { data: await this.#respond(context, parameters.extra as extra), context };
 	}
 
-	#createContext(parameters: Omit<HandleReadParameters, "extra">): CallContext {
+	#createContext(parameters: Omit<HandleReadParameters, "extra">): Context {
 		const { sender, data } = parameters;
 		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
 		if (!isHex(data) || data.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
@@ -214,12 +197,12 @@ export class EZCCIP<extra = undefined> {
 			origin: getAddress(origin),
 			protocol: parameters.protocol ?? this.#protocol,
 			signer: parameters.signer ? toSigner(parameters.signer) : this.#signer,
-			ttl: parameters.ttl ?? this.#ttl,
+			ttl: parameters.ttl === undefined ? this.#ttl : checkTTL(parameters.ttl),
 		};
-		return new CallContext(state, data.toLowerCase() as Hex, new History());
+		return new Context(state, data.toLowerCase() as Hex);
 	}
 
-	async #respond(ctx: CallContext, extra: extra): Promise<Hex> {
+	async #respond(ctx: Context, extra: extra): Promise<Hex> {
 		const result = await this.#call(ctx, extra, false);
 		const { protocol, signer } = ctx;
 		if (protocol === "raw") return result;
@@ -234,21 +217,23 @@ export class EZCCIP<extra = undefined> {
 		});
 	}
 
-	async #call(ctx: CallContext, extra: extra, isSubcall: boolean): Promise<Hex> {
+	async #call(ctx: Context, extra: extra, isSubcall: boolean): Promise<Hex> {
 		const { calldata, history } = ctx;
 		try {
 			const selector = getSelector(calldata);
+			if (selector === MULTICALL_SELECTOR && !isSubcall) {
+				history.name = MULTICALL.name;
+				history.show = false;
+				const [calls] = decode(MULTICALL, calldata) as readonly [readonly Hex[]];
+				const results = calls.map((call) => this.#call(ctx.child(call), extra, true).catch(encodeErrorString));
+				return encodeAbiParameters(MULTICALL.outputs, [await Promise.all(results)]);
+			}
 			const handler = this.#handlers.get(selector);
-			if (!handler || (isSubcall && selector === MULTICALL_SELECTOR)) {
-				throw new CCIPReadError(`unsupported function: ${selector}`, { status: 404 });
-			}
+			if (!handler) throw new CCIPReadError(`unsupported function: ${selector}`, { status: 404 });
 			history.name = handler.abiFunction.name;
-			try {
-				history.args = decodeAbiParameters(handler.abiFunction.inputs, stripSelector(calldata));
-			} catch (cause) {
-				throw new CCIPReadError("invalid calldata", { status: 400, cause });
-			}
-			const result = await handler.fn(history.args as never, ctx, extra);
+			const args = decode(handler.abiFunction, calldata);
+			history.show = args;
+			const result = await handler.fn(args as never, ctx, extra);
 			if (!result) return "0x"; // returns ()
 			if (Array.isArray(result)) return encodeAbiParameters(handler.abiFunction.outputs, result as never);
 			return bytesLikeToHex(result as BytesLike); // already encoded
@@ -260,7 +245,7 @@ export class EZCCIP<extra = undefined> {
 
 	/**
 	 * Handles an HTTP request: `POST {sender, data}` or `GET .../{sender}/{data}.json`.
-	 * Responds with `{data}`, or `{message}` and an HTTP status. CORS is enabled.
+	 * Responds with `{data}`, or `{message}` and an HTTP status. CORS is enabled unless `cors: false`.
 	 * Hooks passed here run after the instance hooks.
 	 */
 	async handleRequest(
@@ -269,7 +254,9 @@ export class EZCCIP<extra = undefined> {
 			? [options?: HandleRequestOptions<extra>]
 			: [options: HandleRequestOptions<extra>]
 	): Promise<Response> {
-		if (request.method === "OPTIONS") {
+		const cors = options?.cors !== false;
+		const headers = cors ? CORS_HEADERS : undefined;
+		if (request.method === "OPTIONS" && cors) {
 			return new Response(null, {
 				status: 204,
 				headers: {
@@ -281,7 +268,7 @@ export class EZCCIP<extra = undefined> {
 		}
 		const url = new URL(request.url);
 		const hooks = [this.#hooks, options];
-		let context: CallContext | undefined;
+		let context: Context | undefined;
 		let data: Hex;
 		try {
 			const { sender, data: calldata } = await parseCCIPReadRequest(request);
@@ -290,10 +277,10 @@ export class EZCCIP<extra = undefined> {
 		} catch (error) {
 			const status = error instanceof CCIPReadError ? error.status : 500;
 			for (const x of hooks) callHook(x?.onError, { request, url, error, status, context });
-			return Response.json({ message: publicErrorMessage(error) }, { status, headers: CORS_HEADERS });
+			return Response.json({ message: publicErrorMessage(error) }, { status, headers });
 		}
 		for (const x of hooks) callHook(x?.onResponse, { request, url, data, context });
-		return Response.json({ data }, { headers: CORS_HEADERS });
+		return Response.json({ data }, { headers });
 	}
 
 	/**
@@ -307,4 +294,13 @@ export class EZCCIP<extra = undefined> {
 	 */
 	readonly fetch: FetchHandler<extra> = ((request: Request) =>
 		(this.handleRequest as unknown as (request: Request) => Promise<Response>)(request)) as FetchHandler<extra>;
+}
+
+/** Decodes the arguments of calldata. */
+function decode(abiFunction: AbiFunction, calldata: Hex): readonly unknown[] {
+	try {
+		return decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
+	} catch (cause) {
+		throw new CCIPReadError("invalid calldata", { status: 400, cause });
+	}
 }

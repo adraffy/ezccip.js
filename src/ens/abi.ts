@@ -18,8 +18,11 @@ export const ABI = parseAbiItem(
 	"function ABI(bytes32 node, uint256 contentTypes) view returns (uint256 contentType, bytes data)",
 );
 
-/** [ENSIP-10](https://docs.ens.domains/ensip/10) resolver ABI with the supported profiles. */
-export const RESOLVE_ABI = [
+/**
+ * [ENSIP-10](https://docs.ens.domains/ensip/10) resolver ABI: `resolve()`, `multicall()`,
+ * the profiles answered by `processENSIP10()`, and its errors.
+ */
+export const resolverAbi = [
 	RESOLVE,
 	MULTICALL,
 	NAME,

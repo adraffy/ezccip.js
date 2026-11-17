@@ -30,7 +30,11 @@ export type RequestHooks = {
 	onError?: ((event: RequestErrorEvent) => unknown) | undefined;
 };
 
-export type HandleRequestOptions<extra = undefined> = RequestHooks & ExtraParameter<extra>;
+export type HandleRequestOptions<extra = undefined> = RequestHooks &
+	ExtraParameter<extra> & {
+		/** Add CORS headers and answer `OPTIONS` preflight requests. (default: true) */
+		cors?: boolean | undefined;
+	};
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request parsed from HTTP. */
 export type CCIPReadRequest = { sender: Hex; data: Hex };

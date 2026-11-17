@@ -72,6 +72,33 @@ describe("serveEZCCIP", () => {
 		expect(spy).not.toHaveBeenCalled();
 	});
 
+	test("cors: false", async () => {
+		await using ccip = await serveEZCCIP(make(), { log: false, cors: false });
+		expect((await fetch(ccip.endpoint, { method: "OPTIONS" })).status).toBe(405);
+		const res = await post(ccip.endpoint, toFunctionSelector(getOrigin));
+		expect(res.status).toBe(200);
+		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+	});
+
+	test("ENSIP-10 options are passed through", async () => {
+		await using ccip = await serveEZCCIP({
+			resolve: () => undefined,
+			unreachableAsEmpty: true,
+			cors: false,
+			log: false,
+		});
+		const text = parseAbiItem("function text(bytes32, string) returns (string)");
+		const resolve = parseAbiItem("function resolve(bytes, bytes) returns (bytes)");
+		const data = encodeFunctionData({
+			abi: [resolve],
+			args: ["0x00", encodeFunctionData({ abi: [text], args: [`0x${"0".repeat(64)}`, "k"] })],
+		});
+		const res = await post(ccip.endpoint, data);
+		expect(res.headers.get("access-control-allow-origin")).toBeNull();
+		const { data: answer } = (await res.json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [text], data: answer })).toBe(""); // not UnreachableName
+	});
+
 	test("record function + signer", async () => {
 		const privateKey = generatePrivateKey();
 		const { address } = privateKeyToAccount(privateKey);

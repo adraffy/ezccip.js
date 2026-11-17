@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { COIN_TYPE_DEFAULT, chainFromCoinType, formatCoinType } from "../../src/index.js";
+import { formatCoinType } from "../../src/ens/coin-type.js";
+import { COIN_TYPE_DEFAULT, chainFromCoinType } from "../../src/index.js";
 
 test("chainFromCoinType", () => {
 	expect(chainFromCoinType(60n)).toBe(1);
