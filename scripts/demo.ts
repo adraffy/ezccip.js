@@ -1,12 +1,13 @@
 // bun run scripts/demo.ts
 
+import { keccak256, stringToBytes } from "viem";
 import pkg from "../package.json" with { type: "json" };
 import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.js";
 import { serveEZCCIP } from "../src/serve.js";
 
 const ezccip = new EZCCIP({
-	// demo key: do not use in production
-	signer: "0xbd1e630bd00f12f0810083ea3bd2be936ead3b2fa84d1bd6690c77da043e9e02",
+	// public demo key from its preimage, like the original serve(): do not use in production
+	signer: keccak256(stringToBytes("ezccip")), // 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9
 	protocol: "tor",
 });
 
