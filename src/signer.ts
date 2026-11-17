@@ -1,5 +1,5 @@
 import { Address, Hex, Secp256k1, Signature } from "ox";
-import type { Awaitable } from "./utils.ts";
+import type { Awaitable } from "./utils.js";
 
 /** Signs a 32-byte hash and returns a 65-byte `(r, s, v)` signature. */
 export type Signer = {

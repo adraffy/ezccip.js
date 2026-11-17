@@ -1,5 +1,5 @@
 import type { Hex } from "ox";
-import { asciiize } from "./utils.ts";
+import { asciiize } from "./utils.js";
 
 type Show = unknown;
 

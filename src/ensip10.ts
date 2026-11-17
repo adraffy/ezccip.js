@@ -1,5 +1,5 @@
 import { Abi, AbiError, AbiFunction, AbiItem, AbiParameters, Hex } from "ox";
-import type { History } from "./history.ts";
+import type { History } from "./history.js";
 import {
 	type Awaitable,
 	type BytesLike,
@@ -9,7 +9,7 @@ import {
 	chainFromCoinType,
 	encodeErrorMessage,
 	toHex,
-} from "./utils.ts";
+} from "./utils.js";
 
 export const RESOLVE_ABI = Abi.from([
 	"function resolve(bytes name, bytes data) view returns (bytes)",

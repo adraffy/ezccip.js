@@ -1,5 +1,5 @@
 import { AbiParameters, Address, Hash, Hex, Secp256k1, Signature } from "ox";
-import type { Signer } from "./signer.ts";
+import type { Signer } from "./signer.js";
 
 /** Response signing protocol that requires a {@link Signer}. */
 export type SignedProtocol = "ens" | "tor";

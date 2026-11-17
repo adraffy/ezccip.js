@@ -1,9 +1,9 @@
 import type { AbiParametersToPrimitiveTypes } from "abitype";
 import { AbiError, AbiFunction, AbiItem, AbiParameters, Address, Hex } from "ox";
-import { RESOLVE_ABI, type ENSRecord, type ProcessENSIP10Options, processENSIP10 } from "./ensip10.ts";
-import { History } from "./history.ts";
-import { type Protocol, signResponse } from "./protocol.ts";
-import { type Signer, type SignerLike, toSigner } from "./signer.ts";
+import { RESOLVE_ABI, type ENSRecord, type ProcessENSIP10Options, processENSIP10 } from "./ensip10.js";
+import { History } from "./history.js";
+import { type Protocol, signResponse } from "./protocol.js";
+import { type Signer, type SignerLike, toSigner } from "./signer.js";
 import {
 	type Awaitable,
 	type BytesLike,
@@ -11,7 +11,7 @@ import {
 	encodeErrorMessage,
 	labelsFromDnsEncoded,
 	toHex,
-} from "./utils.ts";
+} from "./utils.js";
 
 /** Information about the incoming request, shared by every call. Handlers may modify the mutable fields. */
 export type CallContext<extra extends object = {}> = {

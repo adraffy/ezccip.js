@@ -10,7 +10,6 @@
 		"noImplicitOverride": true,
 		"verbatimModuleSyntax": true,
 		"allowImportingTsExtensions": true,
-		"rewriteRelativeImportExtensions": true,
 		"skipLibCheck": true,
 		"noEmit": true
 	},

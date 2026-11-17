@@ -4,8 +4,8 @@
  * @module
  */
 import type { Address } from "ox";
-import { EZCCIP, type EZCCIPOptions, type RecordFunction } from "./ezccip.ts";
-import { CCIPReadError } from "./utils.ts";
+import { EZCCIP, type EZCCIPOptions, type RecordFunction } from "./ezccip.js";
+import { CCIPReadError } from "./utils.js";
 
 export type ServeOptions = {
 	/** Port to listen on. (default: random open port) */
