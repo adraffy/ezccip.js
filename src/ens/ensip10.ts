@@ -1,26 +1,49 @@
+import type { AbiParametersToPrimitiveTypes } from "abitype";
 import {
+	type AbiFunction,
 	decodeAbiParameters,
 	encodeAbiParameters,
 	encodeErrorResult,
 	type Hex,
 	pad,
+	size,
 	toFunctionSelector,
-	toFunctionSignature,
+	zeroAddress,
 } from "viem";
 import type { CallContext } from "../context.js";
 import { CCIPReadError, encodeErrorString } from "../errors.js";
 import type { History } from "../history.js";
 import type { Awaitable, BytesLike, HandlerFunction } from "../types.js";
-import { bytesLikeToHex, getSelector, isBytesLike, stripSelector } from "../utils.js";
-import { type RESOLVE, RESOLVE_ABI, UNREACHABLE_NAME, UNSUPPORTED_RESOLVER_PROFILE } from "./abi.js";
+import { bytesLikeToHex, getSelector, isBytesLike, isEmpty, stripSelector } from "../utils.js";
+import {
+	ABI,
+	ADDR,
+	ADDR_COIN_TYPE,
+	CONTENTHASH,
+	DATA,
+	HAS_ADDR,
+	MULTICALL,
+	NAME,
+	PUBKEY,
+	type RESOLVE,
+	TEXT,
+	UNREACHABLE_NAME,
+	UNSUPPORTED_RESOLVER_PROFILE,
+} from "./abi.js";
 import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, chainFromCoinType, formatCoinType } from "./coin-type.js";
 import { dnsDecode } from "./dns.js";
 
 type Maybe<T> = Awaitable<T | null | undefined>;
 
-/** Answers ENSIP-10 resolver profiles. Every method is optional; missing values resolve as empty. */
+/**
+ * Answers ENSIP-10 resolver profiles. Every method is optional.
+ * Missing values (`null`, `undefined`, or empty bytes) resolve as empty.
+ */
 export interface ENSRecord {
-	/** [ENSIP-9](https://docs.ens.domains/ensip/9) / [ENSIP-11](https://docs.ens.domains/ensip/11) */
+	/**
+	 * [ENSIP-9](https://docs.ens.domains/ensip/9) / [ENSIP-11](https://docs.ens.domains/ensip/11) address bytes.
+	 * EVM coin types (including `60`) must be 20 bytes.
+	 */
 	addr?(coinType: bigint): Maybe<BytesLike>;
 	/** [ENSIP-5](https://docs.ens.domains/ensip/5) */
 	text?(key: string): Maybe<string>;
@@ -33,7 +56,7 @@ export interface ENSRecord {
 	/** [EIP-619](https://github.com/ethereum/EIPs/pull/619): `{x, y}` or already ABI-encoded */
 	pubkey?(): Maybe<{ x: bigint | number; y: bigint | number } | BytesLike>;
 	/** [ENSIP-4](https://docs.ens.domains/ensip/4): `{type, data}` or already ABI-encoded */
-	ABI?(contentTypes: bigint): Maybe<{ type: bigint; data: BytesLike } | BytesLike>;
+	ABI?(contentTypes: bigint): Maybe<{ type: bigint | number; data: BytesLike } | BytesLike>;
 }
 
 export type ProcessENSIP10Options = {
@@ -41,8 +64,8 @@ export type ProcessENSIP10Options = {
 	multicall?: boolean;
 	/** Fall back to the [ENSIP-19](https://docs.ens.domains/ensip/19) default address for EVM coin types. (default: true) */
 	defaultAddress?: boolean;
-	/** Throw instead of returning `UnsupportedResolverProfile`. (default: false) */
-	throwErrors?: boolean;
+	/** Throw a `CCIPReadError` (404) instead of returning `UnsupportedResolverProfile`. (default: false) */
+	throwUnsupported?: boolean;
 	/** Records how the calldata was answered. */
 	history?: History | undefined;
 };
@@ -51,16 +74,16 @@ export type ProcessENSIP10Options = {
  * Answers ENSIP-10 resolver `calldata` from a record and returns the ABI-encoded result.
  * Unsupported profiles are answered with `UnsupportedResolverProfile(bytes4)`.
  */
-export async function processENSIP10(
+export function processENSIP10(
 	record: ENSRecord | null | undefined,
 	calldata: Hex,
 	options: ProcessENSIP10Options = {},
 ): Promise<Hex> {
-	return process(record, calldata, options, false);
+	return answer(record ?? undefined, calldata, options, false);
 }
 
-async function process(
-	record: ENSRecord | null | undefined,
+async function answer(
+	record: ENSRecord | undefined,
 	calldata: Hex,
 	options: ProcessENSIP10Options,
 	isSubcall: boolean,
@@ -70,9 +93,9 @@ async function process(
 		if (history) history.calldata = calldata;
 		const selector = getSelector(calldata);
 		const profile = PROFILES.get(selector);
-		if (!profile || (profile.abiFunction.name === "multicall" && (isSubcall || options.multicall === false))) {
-			if (options.throwErrors) {
-				throw new CCIPReadError(`unsupported resolver profile: ${selector}`, { status: 400 });
+		if (!profile || (profile.abiFunction === MULTICALL && (isSubcall || options.multicall === false))) {
+			if (options.throwUnsupported) {
+				throw new CCIPReadError(`unsupported resolver profile: ${selector}`, { status: 404 });
 			}
 			if (history) history.error = "UnsupportedResolverProfile";
 			return encodeErrorResult({
@@ -81,13 +104,18 @@ async function process(
 			});
 		}
 		const { abiFunction, answer } = profile;
-		const args = decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
+		let args: readonly unknown[];
+		try {
+			args = decodeAbiParameters(abiFunction.inputs, stripSelector(calldata));
+		} catch (cause) {
+			throw new CCIPReadError("invalid calldata", { status: 400, cause });
+		}
 		if (history) {
 			history.name = abiFunction.name;
 			history.args = args;
 			history.show = args.slice(1); // drop namehash
 		}
-		const result = await answer(record ?? undefined, args, options);
+		const result = await answer(record, args as never, options);
 		return isBytesLike(result) ? bytesLikeToHex(result) : encodeAbiParameters(abiFunction.outputs, result as never);
 	} catch (err) {
 		if (history) history.error = err;
@@ -95,84 +123,86 @@ async function process(
 	}
 }
 
-type Answer = (
+type Answer<abiFunction extends AbiFunction> = (
 	record: ENSRecord | undefined,
-	args: readonly any[],
+	args: AbiParametersToPrimitiveTypes<abiFunction["inputs"]>,
 	options: ProcessENSIP10Options,
-) => Promise<readonly unknown[] | BytesLike>;
+) => Promise<AbiParametersToPrimitiveTypes<abiFunction["outputs"]> | BytesLike>;
 
-// keyed by signature, see: RESOLVE_ABI
-const ANSWERS: Record<string, Answer> = {
-	async "multicall(bytes[])"(record, [calls], options) {
+type Profile = { abiFunction: AbiFunction; answer: Answer<AbiFunction> };
+
+function profile<const abiFunction extends AbiFunction>(
+	abiFunction: abiFunction,
+	answer: Answer<abiFunction>,
+): [Hex, Profile] {
+	return [toFunctionSelector(abiFunction), { abiFunction, answer: answer as unknown as Answer<AbiFunction> }];
+}
+
+const PROFILES = new Map<Hex, Profile>([
+	profile(MULTICALL, async (record, [calls], options) => {
 		const { history } = options;
 		if (history) history.show = false;
-		return [
-			await Promise.all(
-				(calls as Hex[]).map((call) =>
-					process(record, call, { ...options, history: history?.addChild() }, true).catch(encodeErrorString),
-				),
-			),
-		];
-	},
-	async "addr(bytes32)"(record, _, options) {
+		const results = calls.map((call) =>
+			answer(record, call, { ...options, history: history?.addChild() }, true).catch(encodeErrorString),
+		);
+		return [await Promise.all(results)];
+	}),
+	profile(ADDR, async (record, _, { defaultAddress }) => {
 		let value = await record?.addr?.(COIN_TYPE_ETH);
-		if (!value && options.defaultAddress !== false) {
+		if (isEmpty(value) && defaultAddress !== false) {
 			value = await record?.addr?.(COIN_TYPE_DEFAULT);
 		}
-		// truncate or pad to 20 bytes
-		return [`0x${(value ? bytesLikeToHex(value).slice(2, 42) : "").padStart(40, "0")}`];
-	},
-	async "addr(bytes32,uint256)"(record, [, coinType], { history, defaultAddress }) {
+		return [isEmpty(value) ? zeroAddress : toEVMAddress(value)];
+	}),
+	profile(ADDR_COIN_TYPE, async (record, [, coinType], { history, defaultAddress }) => {
 		if (history) history.show = [formatCoinType(coinType)];
+		const isEVM = chainFromCoinType(coinType) !== undefined;
 		let value = await record?.addr?.(coinType);
-		if (!value && defaultAddress !== false && chainFromCoinType(coinType)) {
+		if (isEmpty(value) && isEVM && coinType !== COIN_TYPE_DEFAULT && defaultAddress !== false) {
 			value = await record?.addr?.(COIN_TYPE_DEFAULT);
 		}
-		return [value ? bytesLikeToHex(value) : "0x"];
-	},
-	async "hasAddr(bytes32,uint256)"(record, [, coinType], { history }) {
+		if (isEmpty(value)) return ["0x" as Hex];
+		return [isEVM ? toEVMAddress(value) : bytesLikeToHex(value)];
+	}),
+	profile(HAS_ADDR, async (record, [, coinType], { history }) => {
 		if (history) history.show = [formatCoinType(coinType)];
-		return [!!(await record?.addr?.(coinType))];
-	},
-	async "data(bytes32,string)"(record, [, key]) {
+		return [!isEmpty(await record?.addr?.(coinType))];
+	}),
+	profile(DATA, async (record, [, key]) => {
 		const value = await record?.data?.(key);
-		return [value ? bytesLikeToHex(value) : "0x"];
-	},
-	async "text(bytes32,string)"(record, [, key]) {
-		return [(await record?.text?.(key)) || ""];
-	},
-	async "contenthash(bytes32)"(record) {
+		return [isEmpty(value) ? "0x" : bytesLikeToHex(value)];
+	}),
+	profile(TEXT, async (record, [, key]) => [(await record?.text?.(key)) || ""]),
+	profile(CONTENTHASH, async (record) => {
 		const value = await record?.contenthash?.();
-		return [value ? bytesLikeToHex(value) : "0x"];
-	},
-	async "name(bytes32)"(record) {
-		return [(await record?.name?.()) || ""];
-	},
-	async "pubkey(bytes32)"(record) {
+		return [isEmpty(value) ? "0x" : bytesLikeToHex(value)];
+	}),
+	profile(NAME, async (record) => [(await record?.name?.()) || ""]),
+	profile(PUBKEY, async (record) => {
 		const value = await record?.pubkey?.();
 		if (isBytesLike(value)) return value;
-		return value ? [value.x, value.y] : [0n, 0n];
-	},
-	async "ABI(bytes32,uint256)"(record, [, contentTypes], { history }) {
+		return value ? [BigInt(value.x), BigInt(value.y)] : [0n, 0n];
+	}),
+	profile(ABI, async (record, [, contentTypes], { history }) => {
 		if (history) history.show = [formatContentTypes(contentTypes)];
 		const value = await record?.ABI?.(contentTypes);
 		if (isBytesLike(value)) return value;
-		return value ? [value.type, bytesLikeToHex(value.data)] : [0n, "0x"];
-	},
+		return value ? [BigInt(value.type), bytesLikeToHex(value.data)] : [0n, "0x" as Hex];
+	}),
 	// not implemented:
 	// https://github.com/ensdomains/ens-contracts/blob/staging/contracts/resolvers/profiles/IInterfaceResolver.sol
 	// https://github.com/ensdomains/ens-contracts/blob/staging/contracts/resolvers/profiles/IDNSRecordResolver.sol
 	// https://github.com/ensdomains/ens-contracts/blob/staging/contracts/resolvers/profiles/IDNSZoneResolver.sol
 	// https://github.com/ensdomains/ens-contracts/blob/staging/contracts/resolvers/profiles/IVersionableResolver.sol
-};
+]);
 
-const PROFILES = new Map(
-	RESOLVE_ABI.flatMap((item) => {
-		if (item.type !== "function") return [];
-		const answer = ANSWERS[toFunctionSignature(item)];
-		return answer ? [[toFunctionSelector(item), { abiFunction: item, answer }] as const] : [];
-	}),
-);
+/** Validates a 20-byte EVM address. */
+function toEVMAddress(value: BytesLike): Hex {
+	const hex = bytesLikeToHex(value);
+	const n = size(hex);
+	if (n !== 20) throw new Error(`invalid EVM address: expected 20 bytes, got ${n}`);
+	return hex;
+}
 
 function formatContentTypes(contentTypes: bigint) {
 	const v: string[] = [];
@@ -191,18 +221,24 @@ export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
 	unreachableAsEmpty?: boolean;
 };
 
+export type ENSIP10Parameters<extra = undefined> = ENSIP10Options & {
+	/** Looks up the record for a name. */
+	resolve: GetRecord<extra>;
+};
+
 /**
  * Creates a handler for [ENSIP-10](https://docs.ens.domains/ensip/10) `resolve(bytes name, bytes data)`.
  * Note: the name is not normalized.
  */
-export function createENSIP10Handler<extra = undefined>(
-	getRecord: GetRecord<extra>,
-	{ unreachableAsEmpty, ...options }: ENSIP10Options = {},
-): HandlerFunction<typeof RESOLVE, extra> {
+export function createENSIP10Handler<extra = undefined>({
+	resolve,
+	unreachableAsEmpty,
+	...options
+}: ENSIP10Parameters<extra>): HandlerFunction<typeof RESOLVE, extra> {
 	return async ([dnsname, data], ctx) => {
 		const name = dnsDecode(dnsname).join(".");
 		ctx.history.show = [name];
-		const record = await getRecord(name, ctx);
+		const record = await resolve(name, ctx);
 		if (!record && !unreachableAsEmpty) {
 			ctx.history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });

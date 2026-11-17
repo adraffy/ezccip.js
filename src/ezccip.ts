@@ -12,12 +12,19 @@ import {
 	toFunctionSelector,
 	toFunctionSignature,
 } from "viem";
-import { CallContext } from "./context.js";
+import { CallContext, defaultProtocol, type ReadState } from "./context.js";
 import { MULTICALL, RESOLVE } from "./ens/abi.js";
-import { createENSIP10Handler, type ENSIP10Options, type GetRecord } from "./ens/ensip10.js";
-import { CCIPReadError, encodeErrorString } from "./errors.js";
+import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
+import { CCIPReadError, encodeErrorString, publicErrorMessage } from "./errors.js";
 import { History } from "./history.js";
-import { type HandleRequestOptions, handleRequest, type RequestHooks } from "./http.js";
+import {
+	CORS_HEADERS,
+	callHook,
+	type HandleRequestOptions,
+	originFromPath,
+	parseCCIPReadRequest,
+	type RequestHooks,
+} from "./http.js";
 import { type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
 import type { BytesLike, ExtraParameter, Handler, HandlerFunction } from "./types.js";
 import { bytesLikeToHex, getSelector, stripSelector } from "./utils.js";
@@ -29,9 +36,12 @@ export type EZCCIPOptions<extra = undefined> = RequestHooks<extra> & {
 	protocol?: Protocol | undefined;
 	/** Default response lifetime in seconds. (default: 60) */
 	ttl?: number | undefined;
-	/** Fallback origin for HTTP requests. */
+	/** Default origin. (default: `sender`) */
 	origin?: Address | undefined;
-	/** Extracts the origin from the URL of an HTTP request, if the path has none. */
+	/**
+	 * Extracts the origin from the URL of an HTTP request.
+	 * (default: the first `/0x{40}` path component, see {@link originFromPath})
+	 */
 	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
 };
 
@@ -39,10 +49,12 @@ export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> & {
 	sender: Hex;
 	/** Calldata from `OffchainLookup`. */
 	data: Hex;
+	/** Contract that will verify the response. (default: `origin` option, then `sender`) */
 	origin?: Address | undefined;
 	protocol?: Protocol | undefined;
 	signer?: SignerLike | undefined;
 	ttl?: number | undefined;
+	/** The HTTP request, if any. */
 	request?: Request | undefined;
 };
 
@@ -52,6 +64,9 @@ export type HandleReadReturnType<extra = undefined> = {
 	/** Context of the outer call. Its `history` describes the whole response. */
 	context: CallContext<extra>;
 };
+
+/** `(request) => response`, only when `extra` is optional. Otherwise use {@link EZCCIP.handleRequest}. */
+export type FetchHandler<extra> = undefined extends extra ? (request: Request) => Promise<Response> : never;
 
 /** Human-readable function signature, with or without the `function` prefix. */
 type ParseFunction<signature extends string> = Extract<
@@ -76,30 +91,39 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
  * @typeParam extra - Custom object passed with each request, available as `ctx.extra`.
  */
 export class EZCCIP<extra = undefined> {
-	readonly options: Readonly<EZCCIPOptions<extra>>;
 	readonly #signer: Signer | undefined;
+	readonly #protocol: Protocol | undefined;
+	readonly #ttl: number;
+	readonly #origin: Address | undefined;
+	readonly #parseOrigin: (url: URL) => Address | undefined;
+	readonly #hooks: RequestHooks<extra>;
 	readonly #handlers = new Map<Hex, Handler<any, extra>>();
 
-	constructor(options: EZCCIPOptions<extra> = {}) {
-		this.options = options;
-		this.#signer = options.signer ? toSigner(options.signer) : undefined;
+	constructor({ signer, protocol, ttl = 60, origin, parseOrigin, onResponse, onError }: EZCCIPOptions<extra> = {}) {
+		if (origin !== undefined && !isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
+		this.#signer = signer ? toSigner(signer) : undefined;
+		this.#protocol = protocol;
+		this.#ttl = ttl;
+		this.#origin = origin && getAddress(origin);
+		this.#parseOrigin = parseOrigin ?? ((url) => originFromPath(url.pathname));
+		this.#hooks = { onResponse, onError };
 		this.addHandler(MULTICALL, async ([calls], ctx) => {
 			ctx.history.show = false;
 			const results = calls.map((call) =>
-				this.#call(call, ctx.nested(ctx.history.addChild()), true).catch(encodeErrorString),
+				this.#call(ctx.nested(call, ctx.history.addChild()), true).catch(encodeErrorString),
 			);
 			return [await Promise.all(results)];
 		});
 	}
 
 	/** Address of the default signer. */
-	get signer(): Address | undefined {
+	get signerAddress(): Address | undefined {
 		return this.#signer?.address;
 	}
 
 	/** Default protocol. */
 	get protocol(): Protocol {
-		return this.options.protocol ?? (this.#signer ? "ens" : "raw");
+		return this.#protocol ?? defaultProtocol(this.#signer);
 	}
 
 	/** All handlers, including the built-in `multicall`. */
@@ -125,10 +149,12 @@ export class EZCCIP<extra = undefined> {
 		abiFunction: abiFunction,
 		fn: HandlerFunction<abiFunction, extra>,
 	): Handler<abiFunction, extra>;
-	addHandler(abiFunction: string | AbiFunction, fn: HandlerFunction<any, extra>): Handler<any, extra> {
+	addHandler(abiFunction: string | AbiFunction, fn: (...args: any[]) => any): Handler<any, extra> {
 		if (typeof abiFunction === "string") {
 			const signature = abiFunction.trim();
-			abiFunction = parseAbiItem(signature.startsWith("function") ? signature : `function ${signature}`) as AbiFunction;
+			abiFunction = parseAbiItem(
+				signature.startsWith("function ") ? signature : `function ${signature}`,
+			) as AbiFunction;
 		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
 		const handler = {
@@ -150,10 +176,15 @@ export class EZCCIP<extra = undefined> {
 
 	/**
 	 * Implements an [ENSIP-10](https://docs.ens.domains/ensip/10) wildcard resolver:
-	 * `resolve(name, data)` is answered from the record returned by `getRecord`.
+	 * `resolve(name, data)` is answered from the record returned by `resolve`.
+	 *
+	 * @example
+	 * ```ts
+	 * ezccip.enableENSIP10({ resolve: (name, ctx) => db.getRecord(name) });
+	 * ```
 	 */
-	enableENSIP10(getRecord: GetRecord<extra>, options?: ENSIP10Options) {
-		return this.addHandler(RESOLVE, createENSIP10Handler(getRecord, options));
+	enableENSIP10(parameters: ENSIP10Parameters<extra>) {
+		return this.addHandler(RESOLVE, createENSIP10Handler(parameters));
 	}
 
 	/**
@@ -167,42 +198,57 @@ export class EZCCIP<extra = undefined> {
 	 * ```
 	 */
 	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType<extra>> {
-		const { sender, data } = parameters;
-		if (!isAddress(sender, { strict: false })) {
-			throw new CCIPReadError("expected sender address", { status: 400 });
-		}
-		if (!isHex(data) || data.length < 10) {
-			throw new CCIPReadError("expected calldata", { status: 400 });
-		}
-		const signer = parameters.signer ? toSigner(parameters.signer) : this.#signer;
-		const ctx = new CallContext<extra>(
-			{
-				sender: getAddress(sender),
-				calldata: data.toLowerCase() as Hex,
-				request: parameters.request,
-				extra: parameters.extra as extra,
-				origin: getAddress(parameters.origin ?? sender),
-				protocol: parameters.protocol ?? this.options.protocol ?? (signer ? "ens" : "raw"),
-				signer,
-				ttl: parameters.ttl ?? this.options.ttl ?? 60,
-			},
-			new History(),
-		);
-		const result = await this.#call(ctx.calldata, ctx, false);
-		return { data: await encodeResponse(ctx, result), context: ctx };
+		const context = this.#createContext(parameters);
+		return { data: await this.#respond(context), context };
 	}
 
-	async #call(calldata: Hex, ctx: CallContext<extra>, isSubcall: boolean): Promise<Hex> {
-		const { history } = ctx;
+	#createContext(parameters: HandleReadParameters<extra>): CallContext<extra> {
+		const { sender, data } = parameters;
+		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
+		if (!isHex(data) || data.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
+		const origin = parameters.origin ?? this.#origin ?? sender;
+		if (!isAddress(origin, { strict: false })) throw new CCIPReadError("invalid origin", { status: 400 });
+		const state: ReadState<extra> = {
+			sender: getAddress(sender),
+			request: parameters.request,
+			extra: parameters.extra as extra,
+			origin: getAddress(origin),
+			protocol: parameters.protocol ?? this.#protocol,
+			signer: parameters.signer ? toSigner(parameters.signer) : this.#signer,
+			ttl: parameters.ttl ?? this.#ttl,
+		};
+		return new CallContext(state, data.toLowerCase() as Hex, new History());
+	}
+
+	async #respond(ctx: CallContext<extra>): Promise<Hex> {
+		const result = await this.#call(ctx, false);
+		const { protocol, signer } = ctx;
+		if (protocol === "raw") return result;
+		if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
+		return signResponse({
+			protocol,
+			signer,
+			origin: ctx.origin,
+			expires: BigInt(Math.floor(Date.now() / 1000 + ctx.ttl)),
+			calldata: ctx.calldata,
+			result,
+		});
+	}
+
+	async #call(ctx: CallContext<extra>, isSubcall: boolean): Promise<Hex> {
+		const { calldata, history } = ctx;
 		try {
-			history.calldata = calldata;
 			const selector = getSelector(calldata);
 			const handler = this.#handlers.get(selector);
 			if (!handler || (isSubcall && selector === MULTICALL_SELECTOR)) {
-				throw new CCIPReadError(`unsupported ccip method: ${selector}`);
+				throw new CCIPReadError(`unsupported function: ${selector}`, { status: 404 });
 			}
 			history.name = handler.abiFunction.name;
-			history.args = decodeAbiParameters(handler.abiFunction.inputs, stripSelector(calldata));
+			try {
+				history.args = decodeAbiParameters(handler.abiFunction.inputs, stripSelector(calldata));
+			} catch (cause) {
+				throw new CCIPReadError("invalid calldata", { status: 400, cause });
+			}
 			const result = await handler.fn(history.args as never, ctx);
 			if (!result) return "0x"; // returns ()
 			if (Array.isArray(result)) return encodeAbiParameters(handler.abiFunction.outputs, result as never);
@@ -214,20 +260,51 @@ export class EZCCIP<extra = undefined> {
 	}
 
 	/**
-	 * Handles an HTTP request, see {@link handleRequest}.
+	 * Handles an HTTP request: `POST {sender, data}` or `GET .../{sender}/{data}.json`.
+	 * Responds with `{data}`, or `{message}` and an HTTP status. CORS is enabled.
 	 * Hooks passed here run after the instance hooks.
 	 */
-	handleRequest(
+	async handleRequest(
 		request: Request,
 		...[options]: undefined extends extra
 			? [options?: HandleRequestOptions<extra>]
 			: [options: HandleRequestOptions<extra>]
 	): Promise<Response> {
-		return handleRequest(this, request, options);
+		if (request.method === "OPTIONS") {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					...CORS_HEADERS,
+					"access-control-allow-methods": "GET, POST, OPTIONS",
+					"access-control-allow-headers": "*",
+				},
+			});
+		}
+		const url = new URL(request.url);
+		const hooks = [this.#hooks, options];
+		let context: CallContext<extra> | undefined;
+		let data: Hex;
+		try {
+			const { sender, data: calldata } = await parseCCIPReadRequest(request);
+			context = this.#createContext({
+				sender,
+				data: calldata,
+				origin: this.#parseOrigin(url),
+				request,
+				extra: options?.extra,
+			} as HandleReadParameters<extra>);
+			data = await this.#respond(context);
+		} catch (error) {
+			const status = error instanceof CCIPReadError ? error.status : 500;
+			for (const x of hooks) callHook(x?.onError, { request, url, error, status, context });
+			return Response.json({ message: publicErrorMessage(error) }, { status, headers: CORS_HEADERS });
+		}
+		for (const x of hooks) callHook(x?.onResponse, { request, url, data, context });
+		return Response.json({ data }, { headers: CORS_HEADERS });
 	}
 
 	/**
-	 * Fetch handler, bound to this instance. Use {@link handleRequest} when `extra` is required.
+	 * Fetch handler, bound to this instance. Only available when `extra` is optional.
 	 *
 	 * @example
 	 * ```ts
@@ -235,22 +312,6 @@ export class EZCCIP<extra = undefined> {
 	 * export default { fetch: ezccip.fetch };
 	 * ```
 	 */
-	readonly fetch = (request: Request): Promise<Response> => handleRequest(this, request);
-}
-
-async function encodeResponse(ctx: CallContext<any>, result: Hex): Promise<Hex> {
-	const { protocol, signer } = ctx;
-	if (protocol === "raw") return result;
-	if (protocol !== "ens" && protocol !== "tor") {
-		throw new CCIPReadError(`unknown protocol: ${protocol satisfies never}`);
-	}
-	if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
-	return signResponse({
-		protocol,
-		signer,
-		origin: ctx.origin,
-		expires: BigInt(Math.floor(Date.now() / 1000) + ctx.ttl),
-		request: ctx.calldata,
-		result,
-	});
+	readonly fetch: FetchHandler<extra> = ((request: Request) =>
+		(this.handleRequest as unknown as (request: Request) => Promise<Response>)(request)) as FetchHandler<extra>;
 }

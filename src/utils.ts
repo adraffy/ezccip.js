@@ -10,6 +10,11 @@ export function isBytesLike(value: unknown): value is BytesLike {
 	return typeof value === "string" || value instanceof Uint8Array;
 }
 
+/** True for `null`, `undefined`, `"0x"`, and empty `Uint8Array`. */
+export function isEmpty(value: BytesLike | null | undefined): value is null | undefined {
+	return value === null || value === undefined || (typeof value === "string" ? value.length <= 2 : !value.length);
+}
+
 /** Returns the 4-byte selector of calldata (lowercase). */
 export function getSelector(calldata: Hex): Hex {
 	return calldata.slice(0, 10).toLowerCase() as Hex;

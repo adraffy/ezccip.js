@@ -5,7 +5,8 @@ test("chainFromCoinType", () => {
 	expect(chainFromCoinType(60n)).toBe(1);
 	expect(chainFromCoinType(COIN_TYPE_DEFAULT)).toBe(0);
 	expect(chainFromCoinType(COIN_TYPE_DEFAULT | 10n)).toBe(10);
-	expect(chainFromCoinType(0n)).toBe(0);
+	expect(chainFromCoinType(0n)).toBeUndefined(); // bitcoin
+	expect(chainFromCoinType(3n)).toBeUndefined();
 });
 
 test("formatCoinType", () => {

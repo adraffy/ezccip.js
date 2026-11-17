@@ -45,17 +45,20 @@ ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx) => {
 
 // implement a wildcard ENSIP-10 resolver
 // which handles resolve() automatically
-ezccip.enableENSIP10(async (name, ctx) => {
-	return {
-		text(key) {
-			switch (key) {
-				case "name":
-					return "Raffy";
-				case "avatar":
-					return "https://raffy.antistupid.com/ens.jpg";
-			}
-		},
-	};
+ezccip.enableENSIP10({
+	async resolve(name, ctx) {
+		return {
+			text(key) {
+				switch (key) {
+					case "name":
+						return "Raffy";
+					case "avatar":
+						return "https://raffy.antistupid.com/ens.jpg";
+				}
+			},
+		};
+	},
+	// unreachableAsEmpty: false, // unknown names revert UnreachableName
 });
 
 export default { fetch: ezccip.fetch }; // bound fetch() handler
@@ -67,10 +70,18 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 - `args` &mdash; decoded arguments
 - `ctx` &mdash; a `CallContext`, one per call:
-  - `sender`, `calldata`, `request` (the HTTP `Request`, if any), `extra` (your custom object)
-  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. These are shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response
+  - `calldata` &mdash; this call's calldata
   - `history` &mdash; this call's log entry: set `show` or `name` to change how it's logged
-- `result` &mdash; tuple of outputs (ABI-encoded for you), already-encoded `Hex | Uint8Array`, or nothing for `returns ()`
+  - `sender`, `request` (the HTTP `Request`, if any), `extra` (your custom object) &mdash; shared by the whole request
+  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Also shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response. The protocol is chosen after handlers run, so setting `ctx.signer` alone switches the default to `"ens"`
+- `result` &mdash; tuple of outputs (ABI-encoded for you) or already-encoded `Hex | Uint8Array`. Functions without outputs may return nothing
+
+#### Errors
+
+- throw a `CCIPReadError` to send its message and status to the client, eg. `new CCIPReadError("not found", { status: 404 })`
+- other errors are sent as `500` `{"message": "internal error"}`; the real error goes to the `onError` hook and the log
+- bad requests and calldata are `400`, unknown functions are `404`
+- inside `multicall()`, each failed subcall is answered with `Error(string)` using the same rule
 
 #### Multicall
 
@@ -83,7 +94,7 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### serveEZCCIP()
 
-Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance or for a function that returns ENSIP-10 records. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable.
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 resolver given as one object of `resolve`, ENSIP-10 options, `EZCCIP` options, and server options. It logs startup, every response, every error, and shutdown with `console.log`. Pass `log: false` to disable.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";
@@ -92,17 +103,17 @@ const ccip = await serveEZCCIP(ezccip, { port: 8016 }); // default: random port
 // 2026-01-01T00:00:00.000Z Serving "tor" 0xd00d726b2aD6C81E894DC6B87BE6Ce9c5572D2cd http://localhost:8016
 // 2026-01-01T00:00:01.000Z ::1 / resolve(raffy.eth).text(name)
 ccip.endpoint; // "http://localhost:8016"
-ccip.context; // "{signer} {endpoint}" for TOR
+ccip.torContext; // "{signer} {endpoint}"
 await ccip.shutdown();
 // 2026-01-01T00:00:02.000Z Shutdown<2000ms>
 
 // minimal example: fixed text() for any name
-await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), { signer: privateKey });
+await using ccip = await serveEZCCIP({ resolve: () => ({ text: () => "Raffy" }), signer: privateKey });
 ```
 
 ### Serving with fetch
 
-`ezccip.fetch` is a bound `(request: Request) => Promise<Response>`:
+`ezccip.fetch` is a bound `(request: Request) => Promise<Response>` (only available when `extra` is optional):
 
 - `POST {sender, data}` &rarr; `{data}`
 - `GET .../{sender}/{data}.json` &rarr; `{data}`
@@ -140,25 +151,26 @@ console.log(context.history.toString());
 
 ### Hooks
 
-Observe successes and failures, eg. for logging or metrics. Pass them to the constructor, or per request to `handleRequest()`. Exceptions thrown by hooks are ignored.
+Observe successes and failures, eg. for logging or metrics. Pass them to the constructor, or per request to `handleRequest()`. They can't affect the response: exceptions and rejected promises from hooks are ignored.
 
 ```ts
 const ezccip = new EZCCIP({
 	onResponse: ({ url, context }) => console.log(url.pathname, context.history.toString()),
-	onError: ({ url, status, error }) => console.error(url.pathname, status, error),
+	// context is undefined if the request was malformed
+	onError: ({ url, status, error, context }) => console.error(url.pathname, status, context?.history, error),
 });
 ```
 
-#### Sender vs Origin
+### Sender vs Origin
 
 - ⚠️ `sender` may not be the originating contract
   - see: [recursive CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668#recursive-calls-in-ccip-aware-contracts)
 - **Best Solution**: embed `origin` into the endpoint as a path component:
   1.  `http://my.server/.../0xABCD/...`
   1.  `origin = 0xABCD`
-- or, use `parseOrigin: (url: URL) => Address | undefined` to extract `origin` from an arbitrary URL
-- or, supply a fallback `origin`
-- if `origin` is not detected, `origin = sender`
+  - this is the default `parseOrigin`; supply your own `parseOrigin: (url: URL) => Address | undefined` to replace it
+- or, supply a fallback `origin` option (also used by `handleRead()`)
+- if neither finds one, `origin = sender`
 
 ### processENSIP10()
 
@@ -167,16 +179,20 @@ Answers ENSIP-10 `calldata` from a record object and returns the ABI-encoded res
 ```ts
 const record = {
 	text(key) { if (key === "name") return "raffy"; },
-	addr(coinType) { if (coinType === 60n) return "0x1234"; },
+	addr(coinType) { if (coinType === 60n) return "0x51050ec063d393217b436747617ad1c2285aeeee"; },
 };
 const res = await processENSIP10(record, calldata);
 ```
 
+`addr()` values for EVM coin types (`60`, and [ENSIP-11](https://docs.ens.domains/ensip/11) chains including the default) must be 20 bytes or empty; anything else throws. Other coin types are returned as-is. Empty bytes (`"0x"`) count as no address, so the [ENSIP-19](https://docs.ens.domains/ensip/19) default address still applies.
+
 ### Verifying responses
+
+Checks a signed response the way the onchain verifier would: throws if it has expired, or if `signer` is given and doesn't match.
 
 ```ts
 import { verifyResponse } from "@namestone/ezccip";
-const { result, expires, signer } = await verifyResponse({ protocol: "ens", response, request, origin });
+const { result, expires, signer } = await verifyResponse({ protocol: "ens", response, calldata, origin, signer: expected });
 ```
 
 ## Development
@@ -196,10 +212,14 @@ bun run build  # dist/
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
-- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP()` (no default signing key; `server` is still a `node:http` server); or use `ezccip.fetch` with any server
+- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP({ resolve, ...options })` (no default signing key; `server` is still a `node:http` server; `signer`/`context` &rarr; `ezccip.signerAddress`/`torContext`); or use `ezccip.fetch` with any server
 - `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx) => ...)`
 - handlers receive `(args, ctx)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
 - extra context keys &rarr; one custom object, `ctx.extra`
+- `ctx.calldata` is the current call's calldata (inside `multicall`, the subcall)
+- `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`
+- `addr()` values for EVM coin types must be 20 bytes (were truncated or padded)
+- unknown functions are `404` and bad calldata `400` (both were `500`); non-`CCIPReadError` messages are hidden from clients
 - `handleRead(sender, calldata, config)` &rarr; `handleRead({ sender, data, ...config })`
 - `log` / `formatError` options &rarr; `onResponse` / `onError` hooks (`serveEZCCIP` logs by default)
 - `resolvers` option removed &mdash; use `parseOrigin` or `origin`

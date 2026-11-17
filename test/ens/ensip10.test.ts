@@ -3,13 +3,11 @@ import {
 	type AbiFunction,
 	bytesToHex,
 	decodeFunctionResult,
-	encodeAbiParameters,
 	encodeErrorResult,
 	encodeFunctionData,
 	type Hex,
 	pad,
 	parseAbiItem,
-	parseAbiParameters,
 	toFunctionSelector,
 } from "viem";
 import {
@@ -48,47 +46,58 @@ async function query<const fn extends AbiFunction>(
 
 describe("addr() => address", () => {
 	const v = crypto.getRandomValues(new Uint8Array(63));
-	const cases: [string, Hex | Uint8Array | null | undefined][] = [
-		["Uint8Array(0)", v.subarray(0, 0)],
-		["Uint8Array(19)", v.subarray(0, 19)],
-		["Uint8Array(20)", v.subarray(0, 20)],
-		["Uint8Array(21)", v.subarray(0, 21)],
-		["Uint8Array(63)", v],
-		["hex(0)", "0x"],
-		["hex(19)", bytesToHex(v.subarray(0, 19))],
-		["hex(20)", bytesToHex(v.subarray(0, 20))],
-		["hex(21)", bytesToHex(v.subarray(0, 21))],
+	const calldata = encodeFunctionData({ abi: [addr], args: [NODE] });
+	const answer = (value: Hex | Uint8Array | null | undefined) => processENSIP10({ addr: () => value }, calldata);
+	const zero = pad("0x");
+	for (const [label, value] of [
 		["null", null],
 		["undefined", undefined],
-	];
-	const calldata = encodeFunctionData({ abi: [addr], args: [NODE] });
-	for (const [label, value] of cases) {
-		test(label, async () => {
-			const encoded = await processENSIP10({ addr: () => value }, calldata);
-			const hex = value ? (typeof value === "string" ? value : bytesToHex(value)).slice(2) : "";
-			// truncated to 20 bytes, left-padded
-			expect(encoded).toBe(`0x${hex.slice(0, 40).padStart(64, "0")}`);
+		["hex(0)", "0x"],
+		["Uint8Array(0)", v.subarray(0, 0)],
+	] as const) {
+		test(`${label} => zero`, async () => expect(await answer(value)).toBe(zero));
+	}
+	test("hex(20)", async () =>
+		expect(await answer(bytesToHex(v.subarray(0, 20)))).toBe(pad(bytesToHex(v.subarray(0, 20)))));
+	test("Uint8Array(20)", async () => expect(await answer(v.subarray(0, 20))).toBe(pad(bytesToHex(v.subarray(0, 20)))));
+	for (const n of [1, 19, 21, 32, 63]) {
+		test(`${n} bytes => throws`, async () => {
+			expect(answer(v.subarray(0, n))).rejects.toThrow(`expected 20 bytes, got ${n}`);
 		});
 	}
 });
 
-describe("addr() => bytes", () => {
-	const cases: [string, Hex | Uint8Array | null | undefined][] = [
-		["Uint8Array(0)", new Uint8Array(0)],
-		["Uint8Array", crypto.getRandomValues(new Uint8Array(63))],
-		["empty hex", "0x"],
-		["hex", "0x12"],
-		["null", null],
-		["undefined", undefined],
-	];
-	const calldata = encodeFunctionData({ abi: [addrCoin], args: [NODE, 0n] });
-	for (const [label, value] of cases) {
-		test(label, async () => {
-			const encoded = await processENSIP10({ addr: () => value }, calldata);
-			const hex = !value ? "0x" : typeof value === "string" ? value : bytesToHex(value);
-			expect(encoded).toBe(encodeAbiParameters(parseAbiParameters("bytes"), [hex]));
+describe("addr(coinType)", () => {
+	const v = crypto.getRandomValues(new Uint8Array(32));
+	const answer = (coinType: bigint, value: Hex | Uint8Array | null | undefined) =>
+		query({ addr: () => value }, addrCoin, [NODE, coinType]);
+	const evm = [60n, COIN_TYPE_DEFAULT, COIN_TYPE_DEFAULT | 10n];
+	for (const coinType of evm) {
+		test(`evm ${coinType}: 20 bytes`, async () => {
+			expect(await answer(coinType, v.subarray(0, 20))).toBe(bytesToHex(v.subarray(0, 20)));
+		});
+		test(`evm ${coinType}: other sizes throw`, async () => {
+			expect(answer(coinType, v.subarray(0, 21))).rejects.toThrow("expected 20 bytes");
+			expect(answer(coinType, v)).rejects.toThrow("expected 20 bytes");
 		});
 	}
+	test("non-evm: any bytes", async () => {
+		expect(await answer(0n, v)).toBe(bytesToHex(v)); // bitcoin
+		expect(await answer(3n, v.subarray(0, 5))).toBe(bytesToHex(v.subarray(0, 5)));
+	});
+	for (const value of [null, undefined, "0x", new Uint8Array(0)] as const) {
+		test(`empty: ${String(value)}`, async () => expect(await answer(0n, value)).toBe("0x"));
+	}
+});
+
+describe("hasAddr", () => {
+	const answer = (value: Hex | Uint8Array | null | undefined) => query({ addr: () => value }, hasAddr, [NODE, 0n]);
+	test("empty => false", async () => {
+		for (const value of [null, undefined, "0x", new Uint8Array(0)] as const) {
+			expect(await answer(value)).toBe(false);
+		}
+	});
+	test("value => true", async () => expect(await answer("0x12")).toBe(true));
 });
 
 describe("default address", () => {
@@ -108,11 +117,15 @@ describe("default address", () => {
 	test("disabled", async () => {
 		expect(await query(record, addr, [NODE], { defaultAddress: false })).toBe(`0x${"0".repeat(40)}`);
 	});
+	test("empty bytes fall back", async () => {
+		const empty: ENSRecord = { addr: (coinType) => (coinType === COIN_TYPE_DEFAULT ? DEFAULT : "0x") };
+		expect(await query(empty, addrCoin, [NODE, COIN_TYPE_DEFAULT | 10n])).toBe(DEFAULT);
+	});
 });
 
 describe("profiles", () => {
 	const record: ENSRecord = {
-		addr: (coinType) => (coinType === COIN_TYPE_ETH ? "0x1234" : undefined),
+		addr: (coinType) => (coinType === COIN_TYPE_ETH ? "0x51050ec063d393217b436747617ad1c2285aeeee" : undefined),
 		text: (key) => (key === "name" ? "Raffy" : undefined),
 		data: (key) => (key === "test" ? Uint8Array.of(1, 2, 3) : undefined),
 		contenthash: () => "0xe301",
@@ -167,7 +180,7 @@ describe("profiles", () => {
 	});
 });
 
-describe("throwErrors", () => {
+describe("throwUnsupported", () => {
 	const selector = "0x12345678";
 	test("false (default)", async () => {
 		expect(await processENSIP10(undefined, selector)).toBe(
@@ -175,6 +188,6 @@ describe("throwErrors", () => {
 		);
 	});
 	test("true", async () => {
-		expect(processENSIP10(undefined, selector, { throwErrors: true })).rejects.toThrow();
+		expect(processENSIP10(undefined, selector, { throwUnsupported: true })).rejects.toMatchObject({ status: 404 });
 	});
 });

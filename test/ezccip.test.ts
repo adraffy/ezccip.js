@@ -19,8 +19,17 @@ import {
 	parseAbiParameters,
 	toFunctionSelector,
 } from "viem";
+import { generatePrivateKey } from "viem/accounts";
 import { packetToBytes } from "viem/ens";
-import { type CallContext, EZCCIP, type HandlerFunction, MULTICALL, RESOLVE, UNREACHABLE_NAME } from "../src/index.js";
+import {
+	type CallContext,
+	CCIPReadError,
+	EZCCIP,
+	type HandlerFunction,
+	MULTICALL,
+	RESOLVE,
+	UNREACHABLE_NAME,
+} from "../src/index.js";
 
 const sender = getAddress("0x0000000000000000000000000000000000000001");
 const SOLIDITY_ERROR = parseAbiItem("error Error(string)");
@@ -89,8 +98,17 @@ describe("addHandler", () => {
 		expect(await call(ezccip, g, [[{ a: 1n, b: true }]])).toEqual([true]);
 	});
 
+	test("prefix needs a space", async () => {
+		const ezccip = new EZCCIP();
+		const handler = ezccip.addHandler("functionality() returns (uint256)", () => [1n]);
+		expect(handler.signature).toBe("functionality()");
+		expect(await call(ezccip, handler.abiFunction)).toEqual([1n]);
+	});
+
 	test("typed result", () => {
 		const ezccip = new EZCCIP();
+		// @ts-expect-error returning nothing requires no outputs
+		ezccip.addHandler("function f() returns (uint256)", () => {});
 		// @ts-expect-error wrong output type
 		ezccip.addHandler("function f() returns (uint256)", () => ["x"]);
 		// @ts-expect-error wrong arity
@@ -176,11 +194,46 @@ describe("handleRead", () => {
 		expect(decodeFunctionResult({ abi: [handler.abiFunction], data })).toBe("hello");
 	});
 
+	test("origin option", async () => {
+		const origin = "0x0000000000000000000000000000000000000002";
+		const ezccip = new EZCCIP({ origin });
+		const handler = ezccip.addHandler("function f() returns (address)", (_, ctx) => [ctx.origin]);
+		const { context } = await ezccip.handleRead({ sender, data: handler.selector });
+		expect(context.origin).toBe(origin);
+		expect(() => new EZCCIP({ origin: "0x1234" })).toThrow("invalid origin");
+	});
+
+	test("fractional ttl", async () => {
+		const ezccip = new EZCCIP({ signer: generatePrivateKey(), ttl: 1.5 });
+		const handler = ezccip.addHandler("function f()", () => {});
+		expect((await ezccip.handleRead({ sender, data: handler.selector })).data).toBeDefined();
+	});
+
+	test("protocol is chosen after handlers run", async () => {
+		const ezccip = new EZCCIP();
+		const handler = ezccip.addHandler("function f()", (_, ctx) => {
+			expect(ctx.protocol).toBe("raw");
+			ctx.signer = generatePrivateKey();
+			expect(ctx.protocol).toBe("ens");
+		});
+		const { context } = await ezccip.handleRead({ sender, data: handler.selector });
+		expect(context.protocol).toBe("ens");
+	});
+
+	test("fetch requires optional extra", () => {
+		expectTypeOf(new EZCCIP().fetch).toEqualTypeOf<(request: Request) => Promise<Response>>();
+		expectTypeOf(new EZCCIP<{ env: string }>().fetch).toBeNever();
+		expectTypeOf(new EZCCIP<{ env: string } | undefined>().fetch).not.toBeNever();
+	});
+
 	test("invalid input", async () => {
 		const ezccip = new EZCCIP();
+		const f = ezccip.addHandler("function f(uint256)", () => {});
+		expect(ezccip.handleRead({ sender, data: `${f.selector}1234` })).rejects.toMatchObject({ status: 400 });
+		expect(ezccip.handleRead({ sender, data: f.selector, origin: "0x1234" })).rejects.toMatchObject({ status: 400 });
 		expect(ezccip.handleRead({ sender: "0x1234", data: "0x12345678" })).rejects.toMatchObject({ status: 400 });
 		expect(ezccip.handleRead({ sender, data: "0x1234" })).rejects.toMatchObject({ status: 400 });
-		expect(ezccip.handleRead({ sender, data: "0x12345678" })).rejects.toThrow("unsupported ccip method");
+		expect(ezccip.handleRead({ sender, data: "0x12345678" })).rejects.toMatchObject({ status: 404 });
 	});
 
 	test("history", async () => {
@@ -202,9 +255,9 @@ describe("multicall", () => {
 	const ezccip = new EZCCIP();
 	ezccip.addHandler(f, ([x]) => [x * 2n]);
 	ezccip.addHandler(fail, () => {
-		throw new Error("nope");
+		throw new CCIPReadError("nope");
 	});
-	ezccip.enableENSIP10((name) => ({ text: (key) => `${name}:${key}` }));
+	ezccip.enableENSIP10({ resolve: (name) => ({ text: (key) => `${name}:${key}` }) });
 
 	const multicall = (calls: Hex[]) => encode(MULTICALL, [calls]);
 	const results = (data: Hex) => decodeFunctionResult({ abi: [MULTICALL], data });
@@ -230,7 +283,7 @@ describe("multicall", () => {
 	test("subcall cannot be multicall", async () => {
 		const res = await ezccip.handleRead({ sender, data: multicall([multicall([encode(f, [3n])])]) });
 		const [inner] = results(res.data);
-		expect(errorMessage(inner!)).toContain("unsupported ccip method");
+		expect(errorMessage(inner!)).toContain("unsupported function");
 	});
 
 	test("multicall([resolve(name, multicall([...]))])", async () => {
@@ -255,9 +308,11 @@ describe("enableENSIP10", () => {
 
 	test("resolve", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.enableENSIP10((name, ctx) => {
-			expectTypeOf(ctx).toEqualTypeOf<CallContext<undefined>>();
-			return { text: (key) => `${name}:${key}` };
+		ezccip.enableENSIP10({
+			resolve(name, ctx) {
+				expectTypeOf(ctx).toEqualTypeOf<CallContext<undefined>>();
+				return { text: (key) => `${name}:${key}` };
+			},
 		});
 		const res = await ezccip.handleRead({ sender, data: resolve(bytesToHex(packetToBytes("raffy.eth"))) });
 		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("raffy.eth:name");
@@ -266,14 +321,14 @@ describe("enableENSIP10", () => {
 
 	test("unreachable (default)", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.enableENSIP10(() => undefined);
+		ezccip.enableENSIP10({ resolve: () => undefined });
 		const res = await ezccip.handleRead({ sender, data: resolve("0x00") });
 		expect(res.data).toBe(encodeErrorResult({ abi: [UNREACHABLE_NAME], args: ["0x00"] }));
 	});
 
 	test("unreachableAsEmpty", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.enableENSIP10(() => undefined, { unreachableAsEmpty: true });
+		ezccip.enableENSIP10({ resolve: () => undefined, unreachableAsEmpty: true });
 		const res = await ezccip.handleRead({ sender, data: resolve("0x00") });
 		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("");
 	});

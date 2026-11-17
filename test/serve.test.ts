@@ -33,8 +33,7 @@ describe("serveEZCCIP", () => {
 		});
 		const ccip = await serveEZCCIP(make());
 		expect(ccip.endpoint).toBe(`http://localhost:${ccip.port}`);
-		expect(ccip.signer).toBeUndefined();
-		expect(ccip.context).toBe(ccip.endpoint);
+		expect(ccip.torContext).toBe(ccip.endpoint);
 
 		const res = await post(ccip.endpoint, encodeFunctionData({ abi: [f], args: [1n] }));
 		const { data } = (await res.json()) as { data: Hex };
@@ -45,7 +44,7 @@ describe("serveEZCCIP", () => {
 		expect(lines).toHaveLength(4);
 		expect(lines[0]).toBe(`Serving "raw" ${ccip.endpoint}`);
 		expect(lines[1]).toMatch(/ \/ f\(1\)$/);
-		expect(lines[2]).toMatch(/ POST \/ 500 Error: chonk/);
+		expect(lines[2]).toMatch(/ POST \/ 500 fail\(\)<chonk> Error: chonk/);
 		expect(lines[3]).toMatch(/^Shutdown<\d+ms>$/);
 	});
 
@@ -76,13 +75,15 @@ describe("serveEZCCIP", () => {
 	test("record function + signer", async () => {
 		const privateKey = generatePrivateKey();
 		const { address } = privateKeyToAccount(privateKey);
-		await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), {
+		await using ccip = await serveEZCCIP({
+			resolve: () => ({ text: () => "Raffy" }),
+			unreachableAsEmpty: true,
 			signer: privateKey,
 			protocol: "tor",
 			log: false,
 		});
-		expect(ccip.signer).toBe(address);
-		expect(ccip.context).toBe(`${address} ${ccip.endpoint}`);
+		expect(ccip.ezccip.signerAddress).toBe(address);
+		expect(ccip.torContext).toBe(`${address} ${ccip.endpoint}`);
 		expect(ccip.ezccip.protocol).toBe("tor");
 		expect(ccip.ezccip.findHandler("resolve")).toBeDefined();
 	});
@@ -93,8 +94,13 @@ describe("serveEZCCIP", () => {
 		await using ccip = await serveEZCCIP(ezccip, { log: false });
 		const request = encodeFunctionData({ abi: [f], args: [7n] });
 		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex };
-		const { result, signer } = await verifyResponse({ protocol: "ens", response, request, origin: SENDER });
-		expect(signer).toBe(ccip.signer!);
+		const { result } = await verifyResponse({
+			protocol: "ens",
+			response,
+			calldata: request,
+			origin: SENDER,
+			signer: ccip.ezccip.signerAddress,
+		});
 		expect(decodeFunctionResult({ abi: [f], data: result })).toBe(7n);
 	});
 

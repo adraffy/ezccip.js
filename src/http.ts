@@ -1,6 +1,7 @@
 import { type Address, getAddress, type Hex } from "viem";
+import type { CallContext } from "./context.js";
 import { CCIPReadError } from "./errors.js";
-import type { EZCCIP, HandleReadParameters, HandleReadReturnType } from "./ezccip.js";
+import type { HandleReadReturnType } from "./ezccip.js";
 import type { ExtraParameter } from "./types.js";
 
 /** Passed to {@link RequestHooks.onResponse} after a successful response. */
@@ -10,38 +11,38 @@ export type RequestSuccessEvent<extra = undefined> = HandleReadReturnType<extra>
 };
 
 /** Passed to {@link RequestHooks.onError} after a failed response. */
-export type RequestErrorEvent = {
+export type RequestErrorEvent<extra = undefined> = {
 	request: Request;
 	url: URL;
 	error: unknown;
 	/** HTTP status of the response. */
 	status: number;
+	/** Context of the outer call, if the request got that far. Its `history` shows which call failed. */
+	context: CallContext<extra> | undefined;
 };
 
-/** Observers for HTTP requests, eg. for logging or metrics. Exceptions thrown by hooks are ignored. */
+/**
+ * Observers for HTTP requests, eg. for logging or metrics.
+ * Exceptions thrown by hooks and rejections of async hooks are ignored.
+ */
 export type RequestHooks<extra = undefined> = {
-	onResponse?: ((event: RequestSuccessEvent<extra>) => void) | undefined;
-	onError?: ((event: RequestErrorEvent) => void) | undefined;
+	onResponse?: ((event: RequestSuccessEvent<extra>) => unknown) | undefined;
+	onError?: ((event: RequestErrorEvent<extra>) => unknown) | undefined;
 };
 
 export type HandleRequestOptions<extra = undefined> = RequestHooks<extra> & ExtraParameter<extra>;
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request parsed from HTTP. */
-export type CCIPReadRequest = {
-	sender: Hex;
-	data: Hex;
-	/** URL path, without the `/{sender}/{data}.json` suffix of a `GET`. */
-	path: string;
-};
+export type CCIPReadRequest = { sender: Hex; data: Hex };
 
-const CORS_HEADERS = { "access-control-allow-origin": "*" };
+export const CORS_HEADERS = { "access-control-allow-origin": "*" };
 
 /**
  * Parses an EIP-3668 request:
  * - `POST {sender, data}`
  * - `GET .../{sender}/{data}.json`
  */
-export async function parseCCIPReadRequest(request: Request, url = new URL(request.url)): Promise<CCIPReadRequest> {
+export async function parseCCIPReadRequest(request: Request): Promise<CCIPReadRequest> {
 	switch (request.method) {
 		case "POST": {
 			let json: unknown;
@@ -54,70 +55,32 @@ export async function parseCCIPReadRequest(request: Request, url = new URL(reque
 			if (typeof sender !== "string" || typeof data !== "string") {
 				throw new CCIPReadError("expected {sender, data}", { status: 400 });
 			}
-			return { sender, data, path: url.pathname };
+			return { sender, data };
 		}
 		case "GET": {
-			const match = url.pathname.match(/\/(0x[0-9a-f]{40})\/(0x[0-9a-f]*)(?:\.json)?$/i);
+			const match = new URL(request.url).pathname.match(/\/(0x[0-9a-f]{40})\/(0x[0-9a-f]*)(?:\.json)?$/i);
 			if (!match) throw new CCIPReadError("expected /{sender}/{data}", { status: 400 });
-			return {
-				sender: match[1] as Hex,
-				data: match[2] as Hex,
-				path: url.pathname.slice(0, match.index),
-			};
+			return { sender: match[1] as Hex, data: match[2] as Hex };
 		}
 		default:
 			throw new CCIPReadError("unsupported http method", { status: 405 });
 	}
 }
 
-/** Returns the first `/0x{40}` component of a path, eg. `/a/0xABCD.../b`. */
+/** Returns the first `/0x{40}` component of a path, eg. `/a/0xABCD.../b`. The default `parseOrigin`. */
 export function originFromPath(path: string): Address | undefined {
 	const match = path.match(/\/(0x[0-9a-f]{40})(?=\/|$)/i);
 	return match ? getAddress(match[1]!) : undefined;
 }
 
-/**
- * Handles an HTTP request with an {@link EZCCIP} instance.
- * Responds with `{data}`, or `{message}` and an HTTP status on error. CORS is enabled.
- * The origin is taken from the path, then `parseOrigin()`, then the `origin` option.
- */
-export async function handleRequest<extra>(
-	ezccip: EZCCIP<extra>,
-	request: Request,
-	options?: HandleRequestOptions<extra>,
-): Promise<Response> {
-	if (request.method === "OPTIONS") {
-		return new Response(null, {
-			status: 204,
-			headers: {
-				...CORS_HEADERS,
-				"access-control-allow-methods": "GET, POST, OPTIONS",
-				"access-control-allow-headers": "*",
-			},
-		});
-	}
-	const url = new URL(request.url);
-	const hooks = [ezccip.options, options];
-	let event: RequestSuccessEvent<extra>;
+/** Calls an observer, ignoring exceptions and rejections. */
+export function callHook<T>(hook: ((event: T) => unknown) | undefined, event: T): void {
 	try {
-		const { sender, data, path } = await parseCCIPReadRequest(request, url);
-		const origin = originFromPath(path) ?? ezccip.options.parseOrigin?.(url) ?? ezccip.options.origin;
-		const parameters = { sender, data, origin, request, extra: options?.extra } as HandleReadParameters<extra>;
-		event = { ...(await ezccip.handleRead(parameters)), request, url };
-	} catch (error) {
-		const status = error instanceof CCIPReadError ? error.status : 500;
-		for (const x of hooks) callHook(x?.onError, { request, url, error, status });
-		const message = error instanceof Error ? error.message : String(error);
-		return Response.json({ message }, { status, headers: CORS_HEADERS });
-	}
-	for (const x of hooks) callHook(x?.onResponse, event);
-	return Response.json({ data: event.data }, { headers: CORS_HEADERS });
-}
-
-function callHook<T>(hook: ((event: T) => void) | undefined, event: T) {
-	try {
-		hook?.(event);
+		const result = hook?.(event);
+		if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function") {
+			(result as PromiseLike<unknown>).then(undefined, () => {});
+		}
 	} catch {
-		// hooks are observers
+		// observers can't break a response
 	}
 }

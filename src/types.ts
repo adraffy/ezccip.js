@@ -7,13 +7,13 @@ export type Awaitable<T> = T | PromiseLike<T>;
 export type BytesLike = Hex | Uint8Array;
 
 /**
- * Return a tuple of outputs (ABI-encoded automatically),
- * already ABI-encoded bytes, or nothing for `returns ()`.
+ * Return a tuple of outputs (ABI-encoded automatically) or already ABI-encoded bytes.
+ * Functions without outputs may also return nothing.
  */
 export type HandlerResult<abiFunction extends AbiFunction = AbiFunction> =
 	| AbiParametersToPrimitiveTypes<abiFunction["outputs"]>
 	| BytesLike
-	| void;
+	| (abiFunction["outputs"] extends readonly [] ? void : never);
 
 /** Implementation of an offchain function: `(args, ctx) => result`. */
 export type HandlerFunction<abiFunction extends AbiFunction = AbiFunction, extra = undefined> = (

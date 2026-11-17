@@ -46,11 +46,11 @@ describe("parseCCIPReadRequest", () => {
 			method: "POST",
 			body: JSON.stringify({ sender: SENDER, data: "0x12" }),
 		});
-		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12", path: "/a" });
+		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12" });
 	});
 	test("GET", async () => {
 		const request = new Request(`http://localhost/a/${SENDER}/0x12.json`);
-		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12", path: "/a" });
+		expect(await parseCCIPReadRequest(request)).toEqual({ sender: SENDER, data: "0x12" });
 	});
 	test("errors", async () => {
 		const bad = (init: RequestInit, path = "/") => parseCCIPReadRequest(new Request(`http://localhost${path}`, init));
@@ -74,6 +74,12 @@ describe("origin", () => {
 	test("parseOrigin", async () => {
 		const ezccip = make({ parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined });
 		expect(await originOf(await post(ezccip, `/?o=${ORIGIN}`))).toBe(ORIGIN);
+		// replaces the path heuristic
+		expect(await originOf(await post(ezccip, `/${OTHER}`))).toBe(SENDER);
+	});
+	test("parseOrigin falls back to origin option", async () => {
+		const ezccip = make({ origin: OTHER, parseOrigin: () => undefined });
+		expect(await originOf(await post(ezccip, `/${ORIGIN}`))).toBe(OTHER);
 	});
 	for (const path of [`/${ORIGIN}`, `/${ORIGIN}/`, `/a/${ORIGIN}/b`, `/a/${ORIGIN}?x=1`]) {
 		test(path, async () => expect(await originOf(await post(make({ origin: OTHER }), path))).toBe(ORIGIN));
@@ -95,7 +101,7 @@ describe("errors", () => {
 	test("handler error", async () => {
 		const res = await post(make(), "/", { sender: SENDER, data: FAIL });
 		expect(res.status).toBe(500);
-		expect(await res.json()).toEqual({ message: "chonk" });
+		expect(await res.json()).toEqual({ message: "internal error" }); // not "chonk"
 	});
 	test("bad request", async () => {
 		const res = await post(make(), "/", { sender: "0x", data: "0x12345678" });
@@ -137,6 +143,21 @@ describe("hooks", () => {
 		await ezccip.handleRequest(request, { onResponse: () => events.push("request") });
 		expect(events).toEqual(["instance", "request"]);
 	});
+	test("onError has context", async () => {
+		let history = "";
+		const ezccip = make({ onError: ({ context }) => (history = String(context?.history)) });
+		await post(ezccip, "/", { sender: SENDER, data: FAIL });
+		expect(history).toBe("fail()<chonk>");
+	});
+	test("rejecting async hook is ignored", async () => {
+		const ezccip = make({
+			onResponse: async () => {
+				throw new Error("bad hook");
+			},
+		});
+		expect(await originOf(await post(ezccip))).toBe(SENDER);
+		await new Promise((resolve) => setTimeout(resolve, 10)); // let a rejection surface
+	});
 	test("throwing hook is ignored", async () => {
 		const ezccip = make({
 			onResponse: () => {
@@ -161,7 +182,7 @@ test("extra context", async () => {
 
 describe("Bun.serve + viem ccipRequest", () => {
 	const ezccip = new EZCCIP();
-	ezccip.enableENSIP10((name, ctx) => ({ text: (key) => `${name}:${key}:${ctx.origin}` }));
+	ezccip.enableENSIP10({ resolve: (name, ctx) => ({ text: (key) => `${name}:${key}:${ctx.origin}` }) });
 	const server = Bun.serve({ port: 0, fetch: ezccip.fetch });
 	afterAll(() => server.stop(true));
 

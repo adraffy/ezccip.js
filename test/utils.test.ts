@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { decodeErrorResult, parseAbiItem } from "viem";
-import { asciiize, CCIPReadError, encodeErrorString } from "../src/index.js";
+import { CCIPReadError, encodeErrorString, publicErrorMessage } from "../src/index.js";
+import { asciiize } from "../src/utils.js";
 
 test("asciiize", () => {
 	expect(asciiize("💩")).toBe("{1F4A9}");
@@ -16,8 +17,16 @@ test("CCIPReadError", () => {
 	expect(new CCIPReadError("x").status).toBe(500);
 });
 
+test("publicErrorMessage", () => {
+	expect(publicErrorMessage(new CCIPReadError("chonk"))).toBe("chonk");
+	expect(publicErrorMessage(new Error("secret"))).toBe("internal error");
+	expect(publicErrorMessage("x")).toBe("internal error");
+});
+
 test("encodeErrorString", () => {
-	const data = encodeErrorString(new Error("chonk"));
-	const { args } = decodeErrorResult({ abi: [parseAbiItem("error Error(string)")], data });
-	expect(args).toEqual(["chonk"]);
+	const decode = (data: `0x${string}`) =>
+		decodeErrorResult({ abi: [parseAbiItem("error Error(string)")], data }).args[0];
+	expect(decode(encodeErrorString("chonk"))).toBe("chonk");
+	expect(decode(encodeErrorString(new CCIPReadError("chonk")))).toBe("chonk");
+	expect(decode(encodeErrorString(new Error("secret")))).toBe("internal error");
 });

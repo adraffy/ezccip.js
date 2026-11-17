@@ -5,8 +5,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { Address } from "viem";
-import type { GetRecord } from "./ens/ensip10.js";
+import type { ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
 
@@ -25,17 +24,21 @@ export type EZCCIPServer = {
 	readonly port: number;
 	/** eg. `http://localhost:8016` */
 	readonly endpoint: string;
-	/** Address of the default signer. */
-	readonly signer: Address | undefined;
-	/** [TOR context](https://github.com/namestonehq/TheOffchainResolver.sol#context-format): `"{signer} {endpoint}"` */
-	readonly context: string;
+	/**
+	 * [TOR context](https://github.com/namestonehq/TheOffchainResolver.sol#context-format):
+	 * `"{signer} {endpoint}"`, or just the endpoint without a signer.
+	 */
+	readonly torContext: string;
 	/** Stops the server and closes open connections. Safe to call more than once. */
 	shutdown(): Promise<void>;
 	[Symbol.asyncDispose](): Promise<void>;
 };
 
+/** Serve an ENSIP-10 resolver: `resolve` plus its options, `EZCCIP` options, and server options. */
+export type ServeENSIP10Parameters = ENSIP10Parameters & EZCCIPOptions & ServeOptions;
+
 /**
- * Serve an {@link EZCCIP} instance (or an ENSIP-10 record function) over HTTP.
+ * Serve an {@link EZCCIP} instance, or an ENSIP-10 resolver, over HTTP.
  *
  * @example
  * ```ts
@@ -45,20 +48,35 @@ export type EZCCIPServer = {
  * await ccip.shutdown();
  *
  * // minimal: fixed text() for any name
- * await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), { signer: privateKey });
+ * await using ccip = await serveEZCCIP({ resolve: () => ({ text: () => "Raffy" }), signer: privateKey });
  * ```
  */
 export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;
-export function serveEZCCIP(getRecord: GetRecord, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
+export function serveEZCCIP(parameters: ServeENSIP10Parameters): Promise<EZCCIPServer>;
 export async function serveEZCCIP(
-	ezccip: EZCCIP | GetRecord,
-	{ port = 0, hostname, log = true, ...options }: ServeOptions & EZCCIPOptions = {},
+	arg: EZCCIP | ServeENSIP10Parameters,
+	serveOptions: ServeOptions = {},
 ): Promise<EZCCIPServer> {
-	if (typeof ezccip === "function") {
-		const getRecord = ezccip;
+	let ezccip: EZCCIP;
+	if (arg instanceof EZCCIP) {
+		ezccip = arg;
+	} else {
+		const {
+			port,
+			hostname,
+			log,
+			resolve,
+			multicall,
+			defaultAddress,
+			throwUnsupported,
+			unreachableAsEmpty,
+			...options
+		} = arg;
 		ezccip = new EZCCIP(options);
-		ezccip.enableENSIP10(getRecord);
+		ezccip.enableENSIP10({ resolve, multicall, defaultAddress, throwUnsupported, unreachableAsEmpty });
+		serveOptions = { port, hostname, log };
 	}
+	const { port = 0, hostname, log = true } = serveOptions;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 
 	const server = createServer(async (req, res) => {
@@ -67,12 +85,13 @@ export async function serveEZCCIP(
 			const request = await toRequest(req);
 			const response = await ezccip.handleRequest(request, {
 				onResponse: ({ url, context }) => print?.(ip, url.pathname, context.history.toString()),
-				onError: ({ url, error, status }) =>
+				onError: ({ url, error, status, context }) =>
 					print?.(
 						ip,
 						request.method,
 						url.pathname,
 						status,
+						...(context ? [context.history.toString()] : []),
 						// stack trace for unexpected errors
 						status >= 500 && !(error instanceof CCIPReadError) ? error : error instanceof Error ? error.message : error,
 					),
@@ -97,9 +116,9 @@ export async function serveEZCCIP(
 	const address = server.address() as AddressInfo;
 	const host = !hostname || hostname === "0.0.0.0" || hostname === "::" ? "localhost" : hostname;
 	const endpoint = `http://${host.includes(":") ? `[${host}]` : host}:${address.port}`;
-	const { signer } = ezccip;
-	const context = signer ? `${signer} ${endpoint}` : endpoint;
-	print?.(`Serving "${ezccip.protocol}" ${context}`);
+	const signer = ezccip.signerAddress;
+	const torContext = signer ? `${signer} ${endpoint}` : endpoint;
+	print?.(`Serving "${ezccip.protocol}" ${torContext}`);
 
 	let stopping: Promise<void> | undefined;
 	const shutdown = () => {
@@ -117,8 +136,7 @@ export async function serveEZCCIP(
 		server,
 		port: address.port,
 		endpoint,
-		signer,
-		context,
+		torContext,
 		shutdown,
 		[Symbol.asyncDispose]: shutdown,
 	};

@@ -57,10 +57,10 @@ for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
 		for (const [label, signer] of Object.entries(signers)) {
 			test(label, async () => {
 				const ezccip = make({ signer, protocol, ttl: 30 });
-				expect(ezccip.signer).toBe(address);
+				expect(ezccip.signerAddress).toBe(address);
 				const { data: response, context } = await ezccip.handleRead({ sender, data: request, origin });
 				expect(context.protocol).toBe(protocol);
-				const verified = await verifyResponse({ protocol, response, request, origin });
+				const verified = await verifyResponse({ protocol, response, calldata: request, origin });
 				expect(verified.signer).toBe(address);
 				expect(decode(verified.result)).toBe("CHONK");
 				const now = Math.floor(Date.now() / 1000);
@@ -71,8 +71,8 @@ for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
 
 		test("origin defaults to sender", async () => {
 			const { data: response } = await make({ signer: privateKey, protocol }).handleRead({ sender, data: request });
-			expect((await verifyResponse({ protocol, response, request, origin: sender })).signer).toBe(address);
-			expect((await verifyResponse({ protocol, response, request, origin })).signer).not.toBe(address);
+			expect((await verifyResponse({ protocol, response, calldata: request, origin: sender })).signer).toBe(address);
+			expect((await verifyResponse({ protocol, response, calldata: request, origin })).signer).not.toBe(address);
 		});
 
 		test("per-request signer", async () => {
@@ -82,7 +82,7 @@ for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
 				data: request,
 				signer: other,
 			});
-			const verified = await verifyResponse({ protocol, response, request, origin: sender });
+			const verified = await verifyResponse({ protocol, response, calldata: request, origin: sender });
 			expect(verified.signer).toBe(privateKeyToAccount(other).address);
 		});
 
@@ -101,7 +101,7 @@ test("handler changes protocol", async () => {
 		return [s];
 	});
 	const { data: response } = await ezccip.handleRead({ sender, data: request });
-	const verified = await verifyResponse({ protocol: "tor", response, request, origin });
+	const verified = await verifyResponse({ protocol: "tor", response, calldata: request, origin });
 	expect(verified.signer).toBe(address);
 	expect(Number(verified.expires)).toBeGreaterThan(Date.now() / 1000 + 900);
 	expect(isHex(verified.result)).toBe(true);
@@ -109,10 +109,10 @@ test("handler changes protocol", async () => {
 
 // packed layouts expected by the onchain verifiers
 test("hash layout", () => {
-	const p = { origin, expires: 1n, request: "0x12345678", result: "0x" } as const;
-	const tail = [origin, numberToHex(1n, { size: 8 }), keccak256(p.request), keccak256(p.result)] as const;
-	expect(getResponseHash("ens", p)).toBe(keccak256(concat(["0x1900", ...tail])));
-	expect(getResponseHash("tor", p)).toBe(keccak256(concat(tail)));
+	const p = { origin, expires: 1n, calldata: "0x12345678", result: "0x" } as const;
+	const tail = [origin, numberToHex(1n, { size: 8 }), keccak256(p.calldata), keccak256(p.result)] as const;
+	expect(getResponseHash({ protocol: "ens", ...p })).toBe(keccak256(concat(["0x1900", ...tail])));
+	expect(getResponseHash({ protocol: "tor", ...p })).toBe(keccak256(concat(tail)));
 });
 
 test("handler changes signer", async () => {
@@ -123,6 +123,24 @@ test("handler changes signer", async () => {
 		return [s];
 	});
 	const { data: response } = await ezccip.handleRead({ sender, data: request });
-	const verified = await verifyResponse({ protocol: "ens", response, request, origin: sender });
+	const verified = await verifyResponse({ protocol: "ens", response, calldata: request, origin: sender });
 	expect(verified.signer).toBe(privateKeyToAccount(other).address);
+});
+
+describe("verifyResponse", () => {
+	test("expired", async () => {
+		const ezccip = make({ signer: privateKey, ttl: 10 });
+		const { data: response } = await ezccip.handleRead({ sender, data: request });
+		const now = Math.floor(Date.now() / 1000) + 11;
+		expect(verifyResponse({ protocol: "ens", response, calldata: request, origin: sender, now })).rejects.toThrow(
+			"expired",
+		);
+	});
+	test("expected signer", async () => {
+		const { data: response } = await make({ signer: privateKey }).handleRead({ sender, data: request });
+		const verify = (signer: `0x${string}`) =>
+			verifyResponse({ protocol: "ens", response, calldata: request, origin: sender, signer });
+		expect((await verify(address)).signer).toBe(address);
+		expect(verify(privateKeyToAccount(generatePrivateKey()).address)).rejects.toThrow("unexpected signer");
+	});
 });
