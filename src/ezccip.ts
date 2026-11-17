@@ -1,153 +1,66 @@
-import type { AbiParametersToPrimitiveTypes } from "abitype";
-import { AbiError, AbiFunction, AbiItem, AbiParameters, Address, Hex } from "ox";
-import { RESOLVE_ABI, type ENSRecord, type ProcessENSIP10Options, processENSIP10 } from "./ensip10.js";
-import { History } from "./history.js";
-import { type Protocol, signResponse } from "./protocol.js";
-import { type Signer, type SignerLike, toSigner } from "./signer.js";
 import {
-	type Awaitable,
-	type BytesLike,
-	CCIPReadError,
-	encodeErrorMessage,
-	labelsFromDnsEncoded,
-	toHex,
-} from "./utils.js";
+	type AbiFunction,
+	type Address,
+	decodeAbiParameters,
+	encodeAbiParameters,
+	getAddress,
+	type Hex,
+	isAddress,
+	isHex,
+	type ParseAbiItem,
+	parseAbiItem,
+	toFunctionSelector,
+	toFunctionSignature,
+} from "viem";
+import { MULTICALL, RESOLVE } from "./ens/abi.js";
+import { createENSIP10Handler, type ENSIP10Options, type GetRecord } from "./ens/ensip10.js";
+import { CCIPReadError, encodeErrorString } from "./errors.js";
+import { History } from "./history.js";
+import { type HandleRequestOptions, handleRequest, type RequestHooks } from "./http.js";
+import { type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
+import type { BytesLike, CallContext, ExtraParameter, FunctionHandler, RegisteredFunction } from "./types.js";
+import { bytesLikeToHex, getSelector, stripSelector } from "./utils.js";
 
-/** Information about the incoming request, shared by every call. Handlers may modify the mutable fields. */
-export type CallContext<extra extends object = {}> = {
-	/** Contract that triggered `OffchainLookup`. */
-	readonly sender: Address.Address;
-	/** Original calldata (lowercase). */
-	readonly calldata: Hex.Hex;
-	/** Root history. */
-	readonly history: History;
-	/** Contract that will verify the response (defaults to `sender`). */
-	origin: Address.Address;
-	protocol: Protocol;
-	signer: Signer | undefined;
-	/** Response lifetime in seconds. */
-	ttl: number;
-	/** The HTTP request, if served through {@link EZCCIP.fetch} or {@link EZCCIP.handleRequest}. */
-	readonly request?: Request;
-} & extra;
+export type EZCCIPOptions<extra extends object = {}> = RequestHooks<extra> & {
+	/** Default signer: a private key or eg. a viem `LocalAccount`. */
+	signer?: SignerLike | undefined;
+	/** Default protocol. (default: `"ens"` with a signer, otherwise `"raw"`) */
+	protocol?: Protocol | undefined;
+	/** Default response lifetime in seconds. (default: 60) */
+	ttl?: number | undefined;
+	/** Maximum `multicall()` nesting. `0` disables multicall. (default: 2) */
+	recursionLimit?: number | undefined;
+	/** Fallback origin for HTTP requests. */
+	origin?: Address | undefined;
+	/** Extracts the origin from the URL of an HTTP request, if the path has none. */
+	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
+};
 
-/**
- * Return a tuple of outputs (ABI-encoded automatically),
- * already ABI-encoded bytes, or nothing for `returns ()`.
- */
-export type HandlerResult<
-	abiFunction extends AbiFunction.AbiFunction = AbiFunction.AbiFunction,
-> = AbiParametersToPrimitiveTypes<abiFunction["outputs"]> | BytesLike | void;
+export type HandleReadParameters<extra extends object = {}> = ExtraParameter<extra> & {
+	sender: Hex;
+	/** Calldata from `OffchainLookup`. */
+	data: Hex;
+	origin?: Address | undefined;
+	protocol?: Protocol | undefined;
+	signer?: SignerLike | undefined;
+	ttl?: number | undefined;
+	request?: Request | undefined;
+};
 
-/**
- * Implementation of an offchain function.
- * @param args - decoded arguments
- * @param context - shared request context
- * @param history - history for this call (eg. customize logging via `history.show`)
- */
-export type Handler<
-	abiFunction extends AbiFunction.AbiFunction = AbiFunction.AbiFunction,
-	extra extends object = {},
-> = (
-	args: AbiParametersToPrimitiveTypes<abiFunction["inputs"]>,
-	context: CallContext<extra>,
-	history: History
-) => Awaitable<HandlerResult<abiFunction>>;
-
-export type RegisteredHandler<
-	abiFunction extends AbiFunction.AbiFunction = AbiFunction.AbiFunction,
-	extra extends object = {},
-> = {
-	readonly abiFunction: abiFunction;
-	readonly selector: Hex.Hex;
-	readonly signature: string;
-	readonly handler: Handler<abiFunction, extra>;
+export type HandleReadReturnType<extra extends object = {}> = {
+	/** ABI-encoded response for EIP-3668. */
+	data: Hex;
+	history: History;
+	context: CallContext<extra>;
 };
 
 /** Human-readable function signature, with or without the `function` prefix. */
 type ParseFunction<signature extends string> = Extract<
-	AbiFunction.from.ReturnType<
-		signature extends `function ${string}` ? signature : `function ${signature}`
-	>,
-	AbiFunction.AbiFunction
+	ParseAbiItem<signature extends `function ${string}` ? signature : `function ${signature}`>,
+	AbiFunction
 >;
 
-export type RecordFunction<extra extends object = {}> = (
-	name: string,
-	context: CallContext<extra>,
-	history: History
-) => Awaitable<ENSRecord | null | undefined>;
-
-export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
-	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
-	unreachableAsEmpty?: boolean;
-};
-
-export type EZCCIPOptions<extra extends object = {}> = {
-	/** Default signer. */
-	signer?: SignerLike;
-	/** Default signing protocol. (default: `"ens"` if `signer` is set, otherwise `"raw"`) */
-	protocol?: Protocol;
-	/** Default response lifetime in seconds. (default: 60) */
-	ttl?: number;
-	/** Maximum `multicall()` depth. `0` disables multicall. (default: 2) */
-	recursionLimit?: number;
-	/** Fallback origin used by {@link EZCCIP.fetch} if none is found in the URL. */
-	origin?: Address.Address;
-	/** Extract origin from the request URL. (default: first `/0x{40}` path component) */
-	parseOrigin?: (url: URL) => Address.Address | undefined;
-} & RequestHooks<extra>;
-
-/** Called by {@link EZCCIP.handleRequest} after a successful response. */
-export type ResponseEvent<extra extends object = {}> = {
-	request: Request;
-	url: URL;
-	/** ABI-encoded response. */
-	data: Hex.Hex;
-	history: History;
-	context: CallContext<extra>;
-};
-
-/** Called by {@link EZCCIP.handleRequest} after a failed response. */
-export type ErrorEvent = {
-	request: Request;
-	url: URL;
-	error: unknown;
-	/** HTTP status of the response. */
-	status: number;
-};
-
-/** Optional observers for {@link EZCCIP.handleRequest}, eg. for logging. Exceptions thrown by hooks are ignored. */
-export type RequestHooks<extra extends object = {}> = {
-	onResponse?: ((event: ResponseEvent<extra>) => void) | undefined;
-	onError?: ((event: ErrorEvent) => void) | undefined;
-};
-
-export type HandleRequestOptions<extra extends object = {}> = RequestHooks<extra> &
-	({} extends extra ? { extra?: extra } : { extra: extra });
-
-export type HandleReadParameters<extra extends object = {}> = {
-	sender: Hex.Hex;
-	/** Calldata from `OffchainLookup`. */
-	data: Hex.Hex;
-	origin?: Address.Address;
-	protocol?: Protocol;
-	signer?: SignerLike;
-	ttl?: number;
-	request?: Request;
-} & ({} extends extra ? { extra?: extra } : { extra: extra });
-
-export type HandleReadResult<extra extends object = {}> = {
-	/** ABI-encoded response for EIP-3668. */
-	data: Hex.Hex;
-	history: History;
-	context: CallContext<extra>;
-};
-
-const MULTICALL = AbiFunction.fromAbi(RESOLVE_ABI, "multicall");
-const MULTICALL_SELECTOR = AbiFunction.getSelector(MULTICALL);
-const RESOLVE = AbiFunction.fromAbi(RESOLVE_ABI, "resolve");
-const UnreachableName = AbiError.fromAbi(RESOLVE_ABI, "UnreachableName");
+const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
 
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
@@ -155,183 +68,141 @@ const UnreachableName = AbiError.fromAbi(RESOLVE_ABI, "UnreachableName");
  * @example
  * ```ts
  * const ezccip = new EZCCIP({ signer: privateKey });
- * ezccip.register("function add(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
- * export default ezccip; // Bun, Deno, Cloudflare Workers, etc.
+ * ezccip.register("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+ * export default { fetch: ezccip.fetch };
  * ```
  *
- * @typeParam extra - Additional fields passed to {@link EZCCIP.handleRequest} and merged into {@link CallContext}.
+ * @typeParam extra - Additional fields passed with each request and merged into {@link CallContext}.
  */
 export class EZCCIP<extra extends object = {}> {
-	readonly #handlers = new Map<Hex.Hex, RegisteredHandler<any, extra>>();
 	readonly options: Readonly<EZCCIPOptions<extra>>;
 	readonly #signer: Signer | undefined;
+	readonly #functions = new Map<Hex, RegisteredFunction<any, extra>>();
 
 	constructor(options: EZCCIPOptions<extra> = {}) {
 		this.options = options;
 		this.#signer = options.signer ? toSigner(options.signer) : undefined;
-		// multicall is always enabled, disable with { recursionLimit: 0 }
+		// always enabled, see: recursionLimit
 		this.register(MULTICALL, async ([calls], context, history) => {
 			history.show = false;
-			return [
-				await Promise.all(
-					calls.map((call) =>
-						this.#handleCall(call, context, history.enter()).catch(encodeErrorMessage)
-					)
-				),
-			];
+			const results = calls.map((call) => this.#call(call, context, history.enter()).catch(encodeErrorString));
+			return [await Promise.all(results)];
 		});
 	}
 
 	/** Address of the default signer. */
-	get signer(): Address.Address | undefined {
+	get signer(): Address | undefined {
 		return this.#signer?.address;
 	}
 
-	/** Default signing protocol. */
+	/** Default protocol. */
 	get protocol(): Protocol {
 		return this.options.protocol ?? (this.#signer ? "ens" : "raw");
 	}
 
-	/** All registered handlers. */
-	get handlers(): RegisteredHandler<AbiFunction.AbiFunction, extra>[] {
-		return [...this.#handlers.values()];
+	/** Registered functions, including `multicall`. */
+	get functions(): RegisteredFunction<AbiFunction, extra>[] {
+		return [...this.#functions.values()];
 	}
 
 	/**
-	 * Register a handler for an offchain function.
-	 * Arguments and outputs are typed from the function.
-	 * Registering the same selector again replaces the handler.
+	 * Registers an offchain function. Arguments and outputs are typed from the function.
+	 * Registering the same selector again replaces it.
 	 *
 	 * @example
 	 * ```ts
 	 * ezccip.register("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+	 * ezccip.register(AbiFunction.fromAbi(abi, "f"), ([x], context, history) => [x]);
 	 * ```
 	 */
 	register<const signature extends string>(
 		signature: signature,
-		handler: Handler<ParseFunction<signature>, extra>
-	): RegisteredHandler<ParseFunction<signature>, extra>;
-	register<const abiFunction extends AbiFunction.AbiFunction>(
+		handler: FunctionHandler<ParseFunction<signature>, extra>,
+	): RegisteredFunction<ParseFunction<signature>, extra>;
+	register<const abiFunction extends AbiFunction>(
 		abiFunction: abiFunction,
-		handler: Handler<abiFunction, extra>
-	): RegisteredHandler<abiFunction, extra>;
-	register(
-		abiFunction: string | AbiFunction.AbiFunction,
-		handler: Handler<any, extra>
-	): RegisteredHandler<any, extra> {
+		handler: FunctionHandler<abiFunction, extra>,
+	): RegisteredFunction<abiFunction, extra>;
+	register(abiFunction: string | AbiFunction, handler: FunctionHandler<any, extra>): RegisteredFunction<any, extra> {
 		if (typeof abiFunction === "string") {
 			const signature = abiFunction.trim();
-			abiFunction = AbiFunction.from(
-				signature.startsWith("function") ? signature : `function ${signature}`
-			) as AbiFunction.AbiFunction;
+			abiFunction = parseAbiItem(signature.startsWith("function") ? signature : `function ${signature}`) as AbiFunction;
 		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
-		const registered: RegisteredHandler<any, extra> = {
+		const registered = {
 			abiFunction,
-			selector: AbiFunction.getSelector(abiFunction),
-			signature: AbiItem.getSignature(abiFunction),
+			selector: toFunctionSelector(abiFunction),
+			signature: toFunctionSignature(abiFunction),
 			handler,
 		};
-		this.#handlers.set(registered.selector, registered);
+		this.#functions.set(registered.selector, registered);
 		return registered;
 	}
 
-	/** Find a handler by selector, name, signature, or function. */
-	findHandler(
-		key: string | AbiFunction.AbiFunction
-	): RegisteredHandler<AbiFunction.AbiFunction, extra> | undefined {
-		if (typeof key !== "string") key = AbiFunction.getSelector(key);
-		if (/^0x[0-9a-f]{8}$/i.test(key)) {
-			return this.#handlers.get(key.toLowerCase() as Hex.Hex);
-		}
-		for (const x of this.#handlers.values()) {
-			if (x.abiFunction.name === key || x.signature === key) return x;
-		}
+	/** Finds a registered function by name, signature, selector, or ABI. */
+	getFunction(key: string | AbiFunction): RegisteredFunction<AbiFunction, extra> | undefined {
+		if (typeof key !== "string") key = toFunctionSelector(key);
+		if (/^0x[0-9a-f]{8}$/i.test(key)) return this.#functions.get(key.toLowerCase() as Hex);
+		return this.functions.find((x) => x.abiFunction.name === key || x.signature === key);
 	}
 
 	/**
-	 * Implement an [ENSIP-10](https://docs.ens.domains/ensip/10) wildcard resolver
-	 * which handles `resolve(bytes name, bytes data)` automatically.
-	 *
-	 * Note: the name is not normalized.
+	 * Implements an [ENSIP-10](https://docs.ens.domains/ensip/10) wildcard resolver:
+	 * `resolve(name, data)` is answered from the record returned by `getRecord`.
 	 */
-	enableENSIP10(getRecord: RecordFunction<extra>, options: ENSIP10Options = {}) {
-		const { unreachableAsEmpty, ...processOptions } = options;
-		return this.register(RESOLVE, async ([dnsname, data], context, history) => {
-			const name = labelsFromDnsEncoded(dnsname).join(".");
-			history.show = [name];
-			const record = await getRecord(name, context, history);
-			if (!record && !unreachableAsEmpty) {
-				history.error = "UnreachableName";
-				return AbiError.encode(UnreachableName, [dnsname]);
-			}
-			if (record) history.record = record;
-			// returns raw since: abi.decode(abi.encode(x)) == x
-			return processENSIP10(record ?? undefined, data, {
-				...processOptions,
-				history: history.chain(),
-			});
-		});
+	enableENSIP10(getRecord: GetRecord<extra>, options?: ENSIP10Options) {
+		return this.register(RESOLVE, createENSIP10Handler(getRecord, options));
 	}
 
 	/**
-	 * Produce an [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) response.
+	 * Produces an [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) response.
 	 *
 	 * @example
 	 * ```ts
-	 * const { sender, data } = await req.json();
+	 * const { sender, data } = await request.json();
 	 * const { data: response, history } = await ezccip.handleRead({ sender, data });
-	 * return Response.json({ data: response });
 	 * ```
 	 */
-	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadResult<extra>> {
+	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType<extra>> {
 		const { sender, data } = parameters;
-		if (!Address.validate(sender, { strict: false })) {
+		if (!isAddress(sender, { strict: false })) {
 			throw new CCIPReadError("expected sender address", { status: 400 });
 		}
-		if (!Hex.validate(data) || data.length < 10) {
+		if (!isHex(data) || data.length < 10) {
 			throw new CCIPReadError("expected calldata", { status: 400 });
 		}
 		const signer = parameters.signer ? toSigner(parameters.signer) : this.#signer;
 		const history = new History(this.options.recursionLimit ?? 2);
 		const context = {
 			...parameters.extra,
-			sender: Address.checksum(sender),
-			calldata: data.toLowerCase() as Hex.Hex,
-			origin: Address.checksum(parameters.origin ?? sender),
-			protocol:
-				parameters.protocol ??
-				this.options.protocol ??
-				(signer ? "ens" : "raw"),
+			sender: getAddress(sender),
+			calldata: data.toLowerCase() as Hex,
+			origin: getAddress(parameters.origin ?? sender),
+			protocol: parameters.protocol ?? this.options.protocol ?? (signer ? "ens" : "raw"),
 			signer,
 			ttl: parameters.ttl ?? this.options.ttl ?? 60,
 			request: parameters.request,
 			history,
 		} as CallContext<extra>;
-		const result = await this.#handleCall(context.calldata, context, history);
-		return { data: await encodeResponse(context, result), history, context };
+		const result = await this.#call(context.calldata, context, history);
+		return { data: await encodeResponse(context as CallContext, result), history, context };
 	}
 
-	async #handleCall(
-		calldata: Hex.Hex,
-		context: CallContext<extra>,
-		history: History
-	): Promise<Hex.Hex> {
+	async #call(calldata: Hex, context: CallContext<extra>, history: History): Promise<Hex> {
 		try {
 			history.calldata = calldata;
-			const selector = calldata.slice(0, 10).toLowerCase() as Hex.Hex;
-			const handler = this.#handlers.get(selector);
-			if (!handler || (!history.level && handler.selector === MULTICALL_SELECTOR)) {
+			const selector = getSelector(calldata);
+			const fn = this.#functions.get(selector);
+			if (!fn || (!history.level && selector === MULTICALL_SELECTOR)) {
 				throw new CCIPReadError(`unsupported ccip method: ${selector}`);
 			}
-			const { abiFunction } = handler;
-			history.name = abiFunction.name;
-			const args = AbiParameters.decode(abiFunction.inputs, `0x${calldata.slice(10)}`);
+			history.name = fn.abiFunction.name;
+			const args = decodeAbiParameters(fn.abiFunction.inputs, stripSelector(calldata));
 			history.args = history.show = args;
-			const res = await handler.handler(args as never, context, history);
-			if (!res) return "0x"; // falsy implies return ()
-			if (Array.isArray(res)) return AbiParameters.encode(abiFunction.outputs, res as never);
-			return toHex(res as BytesLike); // already encoded
+			const result = await fn.handler(args as never, context, history);
+			if (!result) return "0x"; // returns ()
+			if (Array.isArray(result)) return encodeAbiParameters(fn.abiFunction.outputs, result as never);
+			return bytesLikeToHex(result as BytesLike); // already encoded
 		} catch (err) {
 			history.error = err;
 			throw err;
@@ -339,76 +210,14 @@ export class EZCCIP<extra extends object = {}> {
 	}
 
 	/**
-	 * Handle an HTTP request.
-	 * Supports `POST {sender, data}` and `GET .../{sender}/{data}.json`.
-	 * The origin is parsed from the URL using {@link EZCCIPOptions.parseOrigin}.
-	 * Hooks are called in addition to the instance hooks.
+	 * Handles an HTTP request, see {@link handleRequest}.
+	 * Hooks passed here run after the instance hooks.
 	 */
-	async handleRequest(
+	handleRequest(
 		request: Request,
-		...[options]: {} extends extra
-			? [options?: HandleRequestOptions<extra>]
-			: [options: HandleRequestOptions<extra>]
+		...[options]: {} extends extra ? [options?: HandleRequestOptions<extra>] : [options: HandleRequestOptions<extra>]
 	): Promise<Response> {
-		const url = new URL(request.url);
-		const headers = { "access-control-allow-origin": "*" };
-		const hooks = [this.options, options];
-		let event: ResponseEvent<extra>;
-		try {
-			let sender: Hex.Hex;
-			let data: Hex.Hex;
-			let path = url.pathname;
-			switch (request.method) {
-				case "OPTIONS":
-					return new Response(null, {
-						status: 204,
-						headers: {
-							...headers,
-							"access-control-allow-methods": "GET, POST, OPTIONS",
-							"access-control-allow-headers": "*",
-						},
-					});
-				case "POST": {
-					let json: { sender: Hex.Hex; data: Hex.Hex };
-					try {
-						json = await request.json();
-					} catch (cause) {
-						throw new CCIPReadError("expected JSON", { status: 400, cause });
-					}
-					({ sender, data } = json);
-					break;
-				}
-				case "GET": {
-					const match = path.match(/\/(0x[0-9a-f]{40})\/(0x[0-9a-f]*)(?:\.json)?$/i);
-					if (!match) throw new CCIPReadError("expected /{sender}/{data}", { status: 400 });
-					sender = match[1] as Hex.Hex;
-					data = match[2] as Hex.Hex;
-					path = path.slice(0, match.index);
-					break;
-				}
-				default:
-					throw new CCIPReadError("unsupported http method", { status: 405 });
-			}
-			const origin =
-				path.match(/\/(0x[0-9a-f]{40})(?=\/|$)/i)?.[1] as Address.Address | undefined ??
-				this.options.parseOrigin?.(url) ??
-				this.options.origin;
-			const res = await this.handleRead({
-				sender,
-				data,
-				origin,
-				request,
-				extra: options?.extra,
-			} as HandleReadParameters<extra>);
-			event = { request, url, ...res };
-		} catch (error) {
-			const status = error instanceof CCIPReadError ? error.status : 500;
-			for (const x of hooks) callHook(x?.onError, { request, url, error, status });
-			const message = error instanceof Error ? error.message : String(error);
-			return Response.json({ message }, { status, headers });
-		}
-		for (const x of hooks) callHook(x?.onResponse, event);
-		return Response.json({ data: event.data }, { headers });
+		return handleRequest(this, request, options);
 	}
 
 	/**
@@ -420,38 +229,22 @@ export class EZCCIP<extra extends object = {}> {
 	 * export default { fetch: ezccip.fetch };
 	 * ```
 	 */
-	readonly fetch = (request: Request): Promise<Response> =>
-		(this.handleRequest as unknown as (request: Request) => Promise<Response>)(request);
+	readonly fetch = (request: Request): Promise<Response> => handleRequest(this, request);
 }
 
-
-function callHook<T>(hook: ((event: T) => void) | undefined, event: T) {
-	try {
-		hook?.(event);
-	} catch {
-		// ignored
+async function encodeResponse(context: CallContext, result: Hex): Promise<Hex> {
+	const { protocol, signer } = context;
+	if (protocol === "raw") return result;
+	if (protocol !== "ens" && protocol !== "tor") {
+		throw new CCIPReadError(`unknown protocol: ${protocol satisfies never}`);
 	}
-}
-
-async function encodeResponse(context: CallContext<any>, result: Hex.Hex): Promise<Hex.Hex> {
-	switch (context.protocol) {
-		case "raw":
-			return result;
-		case "ens":
-		case "tor": {
-			if (!context.signer) {
-				throw new CCIPReadError(`protocol "${context.protocol}" requires a signer`);
-			}
-			return signResponse({
-				protocol: context.protocol,
-				signer: context.signer,
-				origin: context.origin,
-				expires: BigInt(Math.floor(Date.now() / 1000) + context.ttl),
-				request: context.calldata,
-				result,
-			});
-		}
-		default:
-			throw new CCIPReadError(`unknown protocol: ${context.protocol}`);
-	}
+	if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
+	return signResponse({
+		protocol,
+		signer,
+		origin: context.origin,
+		expires: BigInt(Math.floor(Date.now() / 1000) + context.ttl),
+		request: context.calldata,
+		result,
+	});
 }

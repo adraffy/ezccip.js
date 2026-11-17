@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { History } from "../src/index.ts";
+import { History } from "../src/index.js";
 
 describe("History", () => {
 	test("recursion limit", () => {

@@ -1,7 +1,8 @@
 // bun run scripts/demo.ts
-import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.ts";
-import { serveEZCCIP } from "../src/serve.ts";
+
 import pkg from "../package.json" with { type: "json" };
+import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.js";
+import { serveEZCCIP } from "../src/serve.js";
 
 const ezccip = new EZCCIP({
 	// demo key: do not use in production
@@ -11,9 +12,7 @@ const ezccip = new EZCCIP({
 
 const DNSTORWithENSProtocol = "0x3CA097Edd180Ea2C2436BD30c021Ca20869087a0";
 
-ezccip.register("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [
-	a * 1000n + b,
-]);
+ezccip.register("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
 
 ezccip.enableENSIP10((name, context) => {
 	if (context.origin === DNSTORWithENSProtocol) {
@@ -49,8 +48,7 @@ ezccip.enableENSIP10((name, context) => {
 			}
 		},
 		pubkey: () => ({ x: 1n, y: 2n }),
-		contenthash: () =>
-			"0xe301017012201687de19f1516b9e560ab8655faa678e3a023ebff43494ac06a36581aafc957e", // vitalik's blog
+		contenthash: () => "0xe301017012201687de19f1516b9e560ab8655faa678e3a023ebff43494ac06a36581aafc957e", // vitalik's blog
 		ABI: () => ({ type: 0n, data: "0x" }),
 	};
 });

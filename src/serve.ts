@@ -3,9 +3,10 @@
  * For other runtimes, use {@link EZCCIP.fetch} directly.
  * @module
  */
-import type { Address } from "ox";
-import { EZCCIP, type EZCCIPOptions, type RecordFunction } from "./ezccip.js";
-import { CCIPReadError } from "./utils.js";
+import type { Address } from "viem";
+import type { GetRecord } from "./ens/ensip10.js";
+import { CCIPReadError } from "./errors.js";
+import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
 
 export type ServeOptions = {
 	/** Port to listen on. (default: random open port) */
@@ -19,14 +20,14 @@ export type ServeOptions = {
 	log?: boolean | ((...args: unknown[]) => void);
 };
 
-export type Served = {
+export type EZCCIPServer = {
 	readonly ezccip: EZCCIP;
 	readonly server: ReturnType<typeof Bun.serve>;
 	readonly port: number;
 	/** eg. `http://localhost:8016` */
 	readonly endpoint: string;
 	/** Address of the default signer. */
-	readonly signer: Address.Address | undefined;
+	readonly signer: Address | undefined;
 	/** [TOR context](https://github.com/namestonehq/TheOffchainResolver.sol#context-format): `"{signer} {endpoint}"` */
 	readonly context: string;
 	/** Stops the server. Safe to call more than once. */
@@ -48,25 +49,19 @@ export type Served = {
  * await using ccip = serveEZCCIP(() => ({ text: () => "Raffy" }), { signer: privateKey });
  * ```
  */
-export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Served;
+export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): EZCCIPServer;
+export function serveEZCCIP(getRecord: GetRecord, options?: ServeOptions & EZCCIPOptions): EZCCIPServer;
 export function serveEZCCIP(
-	getRecord: RecordFunction,
-	options?: ServeOptions & EZCCIPOptions
-): Served;
-export function serveEZCCIP(
-	ezccip: EZCCIP | RecordFunction,
-	{ port = 0, hostname, log = true, ...options }: ServeOptions & EZCCIPOptions = {}
-): Served {
+	ezccip: EZCCIP | GetRecord,
+	{ port = 0, hostname, log = true, ...options }: ServeOptions & EZCCIPOptions = {},
+): EZCCIPServer {
 	if (typeof ezccip === "function") {
 		const getRecord = ezccip;
 		ezccip = new EZCCIP(options);
 		ezccip.enableENSIP10(getRecord);
 	}
 	const ccip = ezccip;
-	const print =
-		log === true
-			? (...a: unknown[]) => console.log(new Date(), ...a)
-			: log || undefined;
+	const print = log === true ? (...a: unknown[]) => console.log(new Date(), ...a) : log || undefined;
 	const server = Bun.serve({
 		port,
 		hostname,
@@ -82,11 +77,7 @@ export function serveEZCCIP(
 						url.pathname,
 						status,
 						// stack trace for unexpected errors
-						status >= 500 && !(error instanceof CCIPReadError)
-							? error
-							: error instanceof Error
-								? error.message
-								: error
+						status >= 500 && !(error instanceof CCIPReadError) ? error : error instanceof Error ? error.message : error,
 					),
 			});
 		},

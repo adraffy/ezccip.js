@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { AbiFunction, Hex, Secp256k1 } from "ox";
-import { EZCCIP, privateKeyToSigner, verifyResponse } from "../src/index.ts";
-import { serveEZCCIP } from "../src/serve.ts";
+import { decodeFunctionResult, encodeFunctionData, type Hex, parseAbiItem, toFunctionSelector } from "viem";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { EZCCIP, verifyResponse } from "../src/index.js";
+import { serveEZCCIP } from "../src/serve.js";
 
 const SENDER = "0x0000000000000000000000000000000000000001";
-const f = AbiFunction.from("function f(uint256 x) returns (uint256)");
-const fail = AbiFunction.from("function fail()");
+const f = parseAbiItem("function f(uint256 x) returns (uint256)");
+const fail = parseAbiItem("function fail()");
 
-function post(endpoint: string, data: Hex.Hex) {
+function post(endpoint: string, data: Hex) {
 	return fetch(endpoint, { method: "POST", body: JSON.stringify({ sender: SENDER, data }) });
 }
 
@@ -24,10 +25,10 @@ describe("serveEZCCIP", () => {
 		expect(ccip.signer).toBeUndefined();
 		expect(ccip.context).toBe(ccip.endpoint);
 
-		const res = await post(ccip.endpoint, AbiFunction.encodeData(f, [1n]));
-		const { data } = (await res.json()) as { data: Hex.Hex };
-		expect(AbiFunction.decodeResult(f, data)).toBe(2n);
-		expect((await post(ccip.endpoint, AbiFunction.encodeData(fail))).status).toBe(500);
+		const res = await post(ccip.endpoint, encodeFunctionData({ abi: [f], args: [1n] }));
+		const { data } = (await res.json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [f], data })).toBe(2n);
+		expect((await post(ccip.endpoint, toFunctionSelector(fail))).status).toBe(500);
 
 		await ccip.shutdown();
 		expect(lines).toHaveLength(4);
@@ -38,35 +39,33 @@ describe("serveEZCCIP", () => {
 	});
 
 	test("record function + signer", async () => {
-		const privateKey = Secp256k1.randomPrivateKey();
-		const signer = privateKeyToSigner(privateKey).address;
+		const privateKey = generatePrivateKey();
+		const { address } = privateKeyToAccount(privateKey);
 		await using ccip = serveEZCCIP(() => ({ text: () => "Raffy" }), {
 			signer: privateKey,
 			protocol: "tor",
 			log: false,
 		});
-		expect(ccip.signer).toBe(signer);
-		expect(ccip.context).toBe(`${signer} ${ccip.endpoint}`);
+		expect(ccip.signer).toBe(address);
+		expect(ccip.context).toBe(`${address} ${ccip.endpoint}`);
 		expect(ccip.ezccip.protocol).toBe("tor");
-		expect(ccip.ezccip.findHandler("resolve")).toBeDefined();
+		expect(ccip.ezccip.getFunction("resolve")).toBeDefined();
 	});
 
 	test("verify over http", async () => {
-		const privateKey = Secp256k1.randomPrivateKey();
-		const ezccip = new EZCCIP({ signer: privateKey });
+		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
 		ezccip.register(f, ([x]) => [x]);
 		await using ccip = serveEZCCIP(ezccip, { log: false });
-		const request = AbiFunction.encodeData(f, [7n]);
-		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex.Hex };
-		const { result, signer } = verifyResponse({ protocol: "ens", response, request, origin: SENDER });
+		const request = encodeFunctionData({ abi: [f], args: [7n] });
+		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex };
+		const { result, signer } = await verifyResponse({ protocol: "ens", response, request, origin: SENDER });
 		expect(signer).toBe(ccip.signer!);
-		expect(AbiFunction.decodeResult(f, result)).toBe(7n);
+		expect(decodeFunctionResult({ abi: [f], data: result })).toBe(7n);
 	});
 
 	test("shutdown is idempotent", async () => {
 		const ccip = serveEZCCIP(new EZCCIP(), { log: false });
 		expect(ccip.shutdown()).toBe(ccip.shutdown());
-		await ccip.shutdown();
 		await ccip.shutdown();
 		expect(fetch(ccip.endpoint)).rejects.toThrow();
 	});

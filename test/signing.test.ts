@@ -1,0 +1,116 @@
+import { describe, expect, test } from "bun:test";
+import { concat, decodeFunctionResult, encodeFunctionData, isHex, keccak256, numberToHex, parseAbiItem } from "viem";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+	EZCCIP,
+	type EZCCIPOptions,
+	getResponseHash,
+	type SignedProtocol,
+	type SignerLike,
+	toSigner,
+	verifyResponse,
+} from "../src/index.js";
+
+const privateKey = generatePrivateKey();
+const { address } = privateKeyToAccount(privateKey);
+const sender = "0x0000000000000000000000000000000000000001";
+const origin = "0x0000000000000000000000000000000000000002";
+
+const fn = parseAbiItem("function f(string s) returns (string)");
+const request = encodeFunctionData({ abi: [fn], args: ["chonk"] });
+const decode = (data: `0x${string}`) => decodeFunctionResult({ abi: [fn], data });
+
+function make(options?: EZCCIPOptions) {
+	const ezccip = new EZCCIP(options);
+	ezccip.register(fn, ([s]) => [s.toUpperCase()]);
+	return ezccip;
+}
+
+describe("toSigner", () => {
+	test("private key", () => expect(toSigner(privateKey).address).toBe(address));
+	test("checksums", () => {
+		const signer = toSigner({ address: address.toLowerCase() as `0x${string}`, sign: async () => "0x" });
+		expect(signer.address).toBe(address);
+	});
+	test("requires sign()", () => expect(() => toSigner({ address })).toThrow());
+});
+
+test("default protocol", () => {
+	expect(new EZCCIP().protocol).toBe("raw");
+	expect(new EZCCIP({ signer: privateKey }).protocol).toBe("ens");
+	expect(new EZCCIP({ signer: privateKey, protocol: "tor" }).protocol).toBe("tor");
+});
+
+test("raw", async () => {
+	const { data, context } = await make().handleRead({ sender, data: request });
+	expect(context.protocol).toBe("raw");
+	expect(decode(data)).toBe("CHONK");
+});
+
+for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
+	describe(protocol, () => {
+		const signers: Record<string, SignerLike> = {
+			"private key": privateKey,
+			"viem account": privateKeyToAccount(privateKey),
+			"custom signer": { address, sign: privateKeyToAccount(privateKey).sign },
+		};
+		for (const [label, signer] of Object.entries(signers)) {
+			test(label, async () => {
+				const ezccip = make({ signer, protocol, ttl: 30 });
+				expect(ezccip.signer).toBe(address);
+				const { data: response, context } = await ezccip.handleRead({ sender, data: request, origin });
+				expect(context.protocol).toBe(protocol);
+				const verified = await verifyResponse({ protocol, response, request, origin });
+				expect(verified.signer).toBe(address);
+				expect(decode(verified.result)).toBe("CHONK");
+				const now = Math.floor(Date.now() / 1000);
+				expect(Number(verified.expires)).toBeGreaterThanOrEqual(now + 29);
+				expect(Number(verified.expires)).toBeLessThanOrEqual(now + 31);
+			});
+		}
+
+		test("origin defaults to sender", async () => {
+			const { data: response } = await make({ signer: privateKey, protocol }).handleRead({ sender, data: request });
+			expect((await verifyResponse({ protocol, response, request, origin: sender })).signer).toBe(address);
+			expect((await verifyResponse({ protocol, response, request, origin })).signer).not.toBe(address);
+		});
+
+		test("per-request signer", async () => {
+			const other = generatePrivateKey();
+			const { data: response } = await make({ signer: privateKey, protocol }).handleRead({
+				sender,
+				data: request,
+				signer: other,
+			});
+			const verified = await verifyResponse({ protocol, response, request, origin: sender });
+			expect(verified.signer).toBe(privateKeyToAccount(other).address);
+		});
+
+		test("requires signer", async () => {
+			expect(make({ protocol }).handleRead({ sender, data: request })).rejects.toThrow("requires a signer");
+		});
+	});
+}
+
+test("handler changes protocol", async () => {
+	const ezccip = new EZCCIP({ signer: privateKey, protocol: "raw" });
+	ezccip.register(fn, ([s], context) => {
+		context.protocol = "tor";
+		context.ttl = 1000;
+		context.origin = origin;
+		return [s];
+	});
+	const { data: response } = await ezccip.handleRead({ sender, data: request });
+	const verified = await verifyResponse({ protocol: "tor", response, request, origin });
+	expect(verified.signer).toBe(address);
+	expect(Number(verified.expires)).toBeGreaterThan(Date.now() / 1000 + 900);
+	expect(isHex(verified.result)).toBe(true);
+});
+
+// packed layouts expected by the onchain verifiers
+test("hash layout", () => {
+	const p = { origin, expires: 1n, request: "0x12345678", result: "0x" } as const;
+	const tail = [origin, numberToHex(1n, { size: 8 }), keccak256(p.request), keccak256(p.result)] as const;
+	expect(getResponseHash("ens", p)).toBe(keccak256(concat(["0x1900", ...tail])));
+	expect(getResponseHash("tor", p)).toBe(keccak256(concat(tail)));
+});

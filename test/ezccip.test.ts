@@ -1,73 +1,92 @@
 import { describe, expect, expectTypeOf, test } from "bun:test";
-import { Abi, AbiError, AbiFunction, AbiParameters, Address, Hex } from "ox";
-import { EZCCIP, type Handler, History, RESOLVE_ABI, dnsEncode } from "../src/index.ts";
+import {
+	type AbiFunction,
+	type Address,
+	bytesToHex,
+	decodeAbiParameters,
+	decodeErrorResult,
+	decodeFunctionResult,
+	encodeAbiParameters,
+	encodeErrorResult,
+	encodeFunctionData,
+	getAbiItem,
+	getAddress,
+	type Hex,
+	numberToBytes,
+	pad,
+	parseAbi,
+	parseAbiItem,
+	parseAbiParameters,
+	toFunctionSelector,
+} from "viem";
+import { packetToBytes } from "viem/ens";
+import { EZCCIP, type FunctionHandler, type History, MULTICALL, RESOLVE, UNREACHABLE_NAME } from "../src/index.js";
 
-const sender = Address.from("0x0000000000000000000000000000000000000001");
+const sender = getAddress("0x0000000000000000000000000000000000000001");
+const SOLIDITY_ERROR = parseAbiItem("error Error(string)");
 
-async function call(
-	ezccip: EZCCIP,
-	abiFunction: AbiFunction.AbiFunction,
-	args: readonly unknown[] = []
-) {
-	const data = AbiFunction.encodeData(abiFunction, args as never);
-	const res = await ezccip.handleRead({ sender, data, protocol: "raw" });
-	return AbiParameters.decode(abiFunction.outputs, res.data) as unknown;
+function encode(abiFunction: AbiFunction, args: readonly unknown[] = []) {
+	return encodeFunctionData({ abi: [abiFunction], args } as never);
+}
+
+/** Calls a function through `handleRead` and returns the decoded outputs as an array. */
+async function call(ezccip: EZCCIP, abiFunction: AbiFunction, args: readonly unknown[] = []) {
+	const { data } = await ezccip.handleRead({ sender, data: encode(abiFunction, args), protocol: "raw" });
+	return decodeAbiParameters(abiFunction.outputs, data) as readonly unknown[];
 }
 
 describe("register", () => {
 	test("signature", async () => {
 		const ezccip = new EZCCIP();
-		const h = ezccip.register(
-			"function plus(uint256 a, uint256 b) returns (uint256 c)",
-			(args, context, history) => {
-				expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
-				expectTypeOf(context.sender).toEqualTypeOf<Address.Address>();
-				expectTypeOf(history).toEqualTypeOf<History>();
-				const [a, b] = args;
-				return [a + b];
-			}
-		);
-		expect(h.signature).toBe("plus(uint256,uint256)");
-		expect(h.selector).toBe(AbiFunction.getSelector("function plus(uint256,uint256)"));
-		expect(await call(ezccip, h.abiFunction, [1n, 2n])).toEqual([3n]);
+		const fn = ezccip.register("function plus(uint256 a, uint256 b) returns (uint256 c)", (args, context, history) => {
+			expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
+			expectTypeOf(context.sender).toEqualTypeOf<Address>();
+			expectTypeOf(history).toEqualTypeOf<History>();
+			const [a, b] = args;
+			return [a + b];
+		});
+		expect(fn.signature).toBe("plus(uint256,uint256)");
+		expect(fn.selector).toBe(toFunctionSelector("function plus(uint256,uint256)"));
+		expect(await call(ezccip, fn.abiFunction, [1n, 2n])).toEqual([3n]);
 	});
 
 	test("without function prefix", async () => {
 		const ezccip = new EZCCIP();
-		const h = ezccip.register("f(string x) returns (string)", ([x]) => {
+		const fn = ezccip.register("f(string x) returns (string)", ([x]) => {
 			expectTypeOf(x).toEqualTypeOf<string>();
 			return [x.toUpperCase()];
 		});
-		expect(await call(ezccip, h.abiFunction, ["abc"])).toEqual(["ABC"]);
+		expect(await call(ezccip, fn.abiFunction, ["abc"])).toEqual(["ABC"]);
 	});
 
 	test("AbiFunction", async () => {
 		const ezccip = new EZCCIP();
-		const fn = AbiFunction.from("function f(bytes32 x) returns (string)");
+		const fn = parseAbiItem("function f(bytes32 x) returns (string)");
 		ezccip.register(fn, ([x]) => {
-			expectTypeOf(x).toEqualTypeOf<Hex.Hex>();
+			expectTypeOf(x).toEqualTypeOf<Hex>();
 			return [x];
 		});
-		const x = Hex.padLeft("0x01", 32);
+		const x = pad("0x01");
 		expect(await call(ezccip, fn, [x])).toEqual([x]);
 	});
 
-	test("from Abi", async () => {
+	test("from an ABI", async () => {
 		const ezccip = new EZCCIP();
-		const abi = Abi.from([
+		const abi = parseAbi([
 			"function f(uint256 x) returns (uint256)",
 			"function f(string s) returns (string)",
 			"function g((uint256 a, bool b)[] s) returns (bool)",
 		]);
-		ezccip.register(AbiFunction.fromAbi(abi, "f", { args: [0n] }), ([x]) => [x * 2n]);
-		ezccip.register(AbiFunction.fromAbi(abi, "f", { args: [""] }), ([s]) => [s + "!"]);
-		ezccip.register(AbiFunction.fromAbi(abi, "g"), ([s]) => {
+		const [fUint, fString, g] = abi;
+		ezccip.register(fUint, ([x]) => [x * 2n]);
+		ezccip.register(fString, ([s]) => [`${s}!`]);
+		ezccip.register(getAbiItem({ abi, name: "g" }), ([s]) => {
 			expectTypeOf(s).toEqualTypeOf<readonly { a: bigint; b: boolean }[]>();
 			return [s.some((x) => x.b)];
 		});
-		expect(await call(ezccip, abi[0], [21n])).toEqual([42n]);
-		expect(await call(ezccip, abi[1], ["hi"])).toEqual(["hi!"]);
-		expect(await call(ezccip, abi[2], [[{ a: 1n, b: true }]])).toEqual([true]);
+		expect(await call(ezccip, fUint, [21n])).toEqual([42n]);
+		expect(await call(ezccip, fString, ["hi"])).toEqual(["hi!"]);
+		expect(await call(ezccip, g, [[{ a: 1n, b: true }]])).toEqual([true]);
 	});
 
 	test("typed result", () => {
@@ -80,52 +99,52 @@ describe("register", () => {
 
 	test("replace", async () => {
 		const ezccip = new EZCCIP();
-		const fn = AbiFunction.from("function f() returns (uint256)");
+		const fn = parseAbiItem("function f() returns (uint256)");
 		ezccip.register(fn, () => [1n]);
 		ezccip.register(fn, () => [2n]);
 		expect(await call(ezccip, fn)).toEqual([2n]);
 	});
 
-	test("invalid", () => {
+	test("not a function", () => {
 		const ezccip = new EZCCIP();
-		expect(() => ezccip.register("event E()" as never, () => {})).toThrow();
+		expect(() => ezccip.register(parseAbiItem("event E()") as never, () => {})).toThrow();
 	});
 });
 
-test("findHandler", () => {
+test("getFunction", () => {
 	const ezccip = new EZCCIP();
-	const fn = AbiFunction.from("function g(uint256 a, uint256 b) view returns (uint256)");
+	const fn = parseAbiItem("function g(uint256 a, uint256 b) view returns (uint256)");
 	ezccip.register(fn, () => [0n]);
-	const selector = AbiFunction.getSelector(fn);
-	expect(ezccip.findHandler("g")?.selector).toBe(selector);
-	expect(ezccip.findHandler("g(uint256,uint256)")?.selector).toBe(selector);
-	expect(ezccip.findHandler(selector)?.selector).toBe(selector);
-	expect(ezccip.findHandler(fn)?.selector).toBe(selector);
-	expect(ezccip.findHandler("multicall")).toBeDefined();
-	expect(ezccip.findHandler("nope")).toBeUndefined();
+	const selector = toFunctionSelector(fn);
+	expect(ezccip.getFunction("g")?.selector).toBe(selector);
+	expect(ezccip.getFunction("g(uint256,uint256)")?.selector).toBe(selector);
+	expect(ezccip.getFunction(selector)?.selector).toBe(selector);
+	expect(ezccip.getFunction(fn)?.selector).toBe(selector);
+	expect(ezccip.getFunction("multicall")).toBeDefined();
+	expect(ezccip.getFunction("nope")).toBeUndefined();
+	expect(ezccip.functions.map((x) => x.signature)).toEqual(["multicall(bytes[])", "g(uint256,uint256)"]);
 });
 
-describe("handler results", () => {
-	const fn = AbiFunction.from("function f(uint256) returns (uint256)");
-	const EXPECT = 1337n;
-	const cases: Record<string, Handler<typeof fn>> = {
+describe("results", () => {
+	const fn = parseAbiItem("function f(uint256) returns (uint256)");
+	const cases: Record<string, FunctionHandler<typeof fn>> = {
 		tuple: ([x]) => [x],
-		hex: ([x]) => AbiParameters.encode(fn.outputs, [x]),
-		bytes: ([x]) => Hex.toBytes(Hex.fromNumber(x, { size: 32 })),
+		hex: ([x]) => encodeAbiParameters(parseAbiParameters("uint256"), [x]),
+		bytes: ([x]) => numberToBytes(x, { size: 32 }),
 		async: async ([x]) => [x],
 	};
-	for (const [label, impl] of Object.entries(cases)) {
+	for (const [label, handler] of Object.entries(cases)) {
 		test(label, async () => {
 			const ezccip = new EZCCIP();
-			ezccip.register(fn, impl);
-			expect(await call(ezccip, fn, [EXPECT])).toEqual([EXPECT]);
+			ezccip.register(fn, handler);
+			expect(await call(ezccip, fn, [1337n])).toEqual([1337n]);
 		});
 	}
 	test("void", async () => {
 		const ezccip = new EZCCIP();
-		const g = AbiFunction.from("function g()");
+		const g = parseAbiItem("function g()");
 		ezccip.register(g, () => {});
-		const { data } = await ezccip.handleRead({ sender, data: AbiFunction.encodeData(g) });
+		const { data } = await ezccip.handleRead({ sender, data: encode(g) });
 		expect(data).toBe("0x");
 	});
 });
@@ -133,7 +152,7 @@ describe("handler results", () => {
 describe("handleRead", () => {
 	test("context", async () => {
 		const ezccip = new EZCCIP({ ttl: 5 });
-		const fn = AbiFunction.from("function f() returns (address, address)");
+		const fn = parseAbiItem("function f() returns (address, address)");
 		ezccip.register(fn, (_, context, history) => {
 			expect(context.calldata).toBe(history.calldata!);
 			expect(context.ttl).toBe(5);
@@ -142,24 +161,20 @@ describe("handleRead", () => {
 			return [context.sender, context.origin];
 		});
 		const origin = "0x0000000000000000000000000000000000000002";
-		const res = await ezccip.handleRead({
-			sender: sender.toLowerCase() as Hex.Hex,
-			data: AbiFunction.encodeData(fn),
-			origin,
-		});
+		const res = await ezccip.handleRead({ sender: sender.toLowerCase() as Hex, data: encode(fn), origin });
 		expect(res.context.sender).toBe(sender);
-		expect(AbiFunction.decodeResult(fn, res.data)).toEqual([sender, origin]);
+		expect(decodeFunctionResult({ abi: [fn], data: res.data })).toEqual([sender, origin]);
 	});
 
 	test("extra context", async () => {
 		const ezccip = new EZCCIP<{ env: { greeting: string } }>();
-		ezccip.register("f() returns (string)", (_, context) => [context.env.greeting]);
+		const fn = ezccip.register("f() returns (string)", (_, context) => [context.env.greeting]);
 		const { data } = await ezccip.handleRead({
 			sender,
-			data: AbiFunction.getSelector("function f()"),
+			data: fn.selector,
 			extra: { env: { greeting: "hello" } },
 		});
-		expect(AbiParameters.decode(AbiParameters.from(["string"]), data)).toEqual(["hello"]);
+		expect(decodeFunctionResult({ abi: [fn.abiFunction], data })).toBe("hello");
 	});
 
 	test("invalid input", async () => {
@@ -171,95 +186,81 @@ describe("handleRead", () => {
 
 	test("history", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.register("f(string s, uint256 x) returns (uint256)", (_, __, history) => {
+		const fn = ezccip.register("f(string s, uint256 x) returns (uint256)", (_, __, history) => {
 			history.show = ["custom"];
 			history.name = "Chonk";
 			return [0n];
 		});
-		const fn = AbiFunction.from("function f(string, uint256)");
-		const { history } = await ezccip.handleRead({ sender, data: AbiFunction.encodeData(fn, ["a", 1n]) });
+		const { history } = await ezccip.handleRead({ sender, data: encode(fn.abiFunction, ["a", 1n]) });
 		expect(String(history)).toBe("Chonk(custom)");
 	});
 });
 
 describe("multicall", () => {
-	const multicall = AbiFunction.fromAbi(RESOLVE_ABI, "multicall");
-	const f = AbiFunction.from("function f(uint256 x) returns (uint256)");
-	const g = AbiFunction.from("function g()");
+	const f = parseAbiItem("function f(uint256 x) returns (uint256)");
+	const fail = parseAbiItem("function fail()");
 	function make(recursionLimit?: number) {
 		const ezccip = new EZCCIP({ recursionLimit });
 		ezccip.register(f, ([x]) => [x * 2n]);
-		ezccip.register(g, () => {
+		ezccip.register(fail, () => {
 			throw new Error("nope");
 		});
 		return ezccip;
 	}
+	const multicall = (calls: Hex[]) => encode(MULTICALL, [calls]);
+	const results = (data: Hex) => decodeFunctionResult({ abi: [MULTICALL], data });
 
 	test("calls + errors", async () => {
-		const ezccip = make();
-		const data = AbiFunction.encodeData(multicall, [
-			[AbiFunction.encodeData(f, [1n]), AbiFunction.encodeData(g)],
-		]);
-		const res = await ezccip.handleRead({ sender, data });
-		const [a, b] = AbiFunction.decodeResult(multicall, res.data);
-		expect(AbiFunction.decodeResult(f, a!)).toBe(2n);
-		expect(AbiError.decode(AbiError.from("error Error(string)"), b!)).toBe("nope");
-		expect(String(res.history)).toBe("multicall()^2 [f(1) g()<nope>]");
+		const res = await make().handleRead({ sender, data: multicall([encode(f, [1n]), encode(fail)]) });
+		const [a, b] = results(res.data);
+		expect(decodeFunctionResult({ abi: [f], data: a! })).toBe(2n);
+		expect(decodeErrorResult({ abi: [SOLIDITY_ERROR], data: b! }).args).toEqual(["nope"]);
+		expect(String(res.history)).toBe("multicall()^2 [f(1) fail()<nope>]");
 	});
 
 	test("nested", async () => {
-		const ezccip = make(2);
-		const inner = AbiFunction.encodeData(multicall, [[AbiFunction.encodeData(f, [3n])]]);
-		const data = AbiFunction.encodeData(multicall, [[inner]]);
-		const res = await ezccip.handleRead({ sender, data });
-		const [a] = AbiFunction.decodeResult(multicall, res.data);
-		const [b] = AbiFunction.decodeResult(multicall, a!);
-		expect(AbiFunction.decodeResult(f, b!)).toBe(6n);
+		const res = await make(2).handleRead({ sender, data: multicall([multicall([encode(f, [3n])])]) });
+		const [inner] = results(res.data);
+		const [a] = results(inner!);
+		expect(decodeFunctionResult({ abi: [f], data: a! })).toBe(6n);
 	});
 
 	test("recursion limit", async () => {
-		const ezccip = make(1);
-		const inner = AbiFunction.encodeData(multicall, [[AbiFunction.encodeData(f, [3n])]]);
-		const data = AbiFunction.encodeData(multicall, [[inner]]);
-		const res = await ezccip.handleRead({ sender, data });
-		const [a] = AbiFunction.decodeResult(multicall, res.data);
-		expect(AbiError.decode(AbiError.from("error Error(string)"), a!)).toContain("unsupported ccip method");
+		const res = await make(1).handleRead({ sender, data: multicall([multicall([encode(f, [3n])])]) });
+		const [inner] = results(res.data);
+		const [message] = decodeErrorResult({ abi: [SOLIDITY_ERROR], data: inner! }).args;
+		expect(message).toContain("unsupported ccip method");
 	});
 
 	test("disabled", async () => {
-		const ezccip = make(0);
-		const data = AbiFunction.encodeData(multicall, [[]]);
-		expect(ezccip.handleRead({ sender, data })).rejects.toThrow("unsupported ccip method");
+		expect(make(0).handleRead({ sender, data: multicall([]) })).rejects.toThrow("unsupported ccip method");
 	});
 });
 
 describe("enableENSIP10", () => {
-	const resolve = AbiFunction.fromAbi(RESOLVE_ABI, "resolve");
-	const text = AbiFunction.from("function text(bytes32, string) returns (string)");
-	const inner = AbiFunction.encodeData(text, [Hex.padLeft("0x", 32), "name"]);
+	const text = parseAbiItem("function text(bytes32, string) returns (string)");
+	const inner = encode(text, [pad("0x"), "name"]);
+	const resolve = (name: Hex) => encode(RESOLVE, [name, inner]);
 
 	test("resolve", async () => {
 		const ezccip = new EZCCIP();
 		ezccip.enableENSIP10((name) => ({ text: (key) => `${name}:${key}` }));
-		const data = AbiFunction.encodeData(resolve, [dnsEncode("raffy.eth"), inner]);
-		const res = await ezccip.handleRead({ sender, data });
-		expect(AbiFunction.decodeResult(text, res.data)).toBe("raffy.eth:name");
+		const res = await ezccip.handleRead({ sender, data: resolve(bytesToHex(packetToBytes("raffy.eth"))) });
+		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("raffy.eth:name");
 		expect(String(res.history)).toBe("resolve(raffy.eth).text(name)");
 	});
 
 	test("unreachable (default)", async () => {
 		const ezccip = new EZCCIP();
 		ezccip.enableENSIP10(() => undefined);
-		const data = AbiFunction.encodeData(resolve, ["0x00", inner]);
-		const res = await ezccip.handleRead({ sender, data });
-		expect(res.data).toBe(AbiError.encode(AbiError.fromAbi(RESOLVE_ABI, "UnreachableName"), ["0x00"]));
+		const res = await ezccip.handleRead({ sender, data: resolve("0x00") });
+		expect(res.data).toBe(encodeErrorResult({ abi: [UNREACHABLE_NAME], args: ["0x00"] }));
 	});
 
 	test("unreachableAsEmpty", async () => {
 		const ezccip = new EZCCIP();
 		ezccip.enableENSIP10(() => undefined, { unreachableAsEmpty: true });
-		const data = AbiFunction.encodeData(resolve, ["0x00", inner]);
-		const res = await ezccip.handleRead({ sender, data });
-		expect(AbiFunction.decodeResult(text, res.data)).toBe("");
+		const res = await ezccip.handleRead({ sender, data: resolve("0x00") });
+		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("");
 	});
 });
