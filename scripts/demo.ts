@@ -53,5 +53,5 @@ ezccip.enableENSIP10((name, ctx) => {
 	};
 });
 
-const ccip = serveEZCCIP(ezccip, { port: 8016 });
+const ccip = await serveEZCCIP(ezccip, { port: 8016 });
 process.on("SIGINT", () => ccip.shutdown().then(() => process.exit()));

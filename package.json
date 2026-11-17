@@ -53,6 +53,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.6.8",
 		"@types/bun": "^1.4.4",
+		"@types/node": "^22",
 		"typescript": "^7.0.2",
 		"viem": "^2.58.0"
 	},

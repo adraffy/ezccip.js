@@ -13,7 +13,7 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
   - `"raw"` &mdash; unsigned response (EVM Gateway, testing, etc.)
 - `enableENSIP10()` wildcard resolver with drop-in [namestonehq/**enson.js**](https://github.com/namestonehq/enson.js) **Record**-type support
 - supports _Multicall-over-CCIP-Read_ (see [Multicall](#multicall))
-- `serveEZCCIP()` to quickly launch a server (Bun)
+- `serveEZCCIP()` to quickly launch a server (Node, Bun, Deno)
 
 ## Demo
 
@@ -83,12 +83,12 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### serveEZCCIP()
 
-Start a [simple Bun server](./src/serve.ts) for an `EZCCIP` instance or for a function that returns ENSIP-10 records. It logs startup, every response, every error, and shutdown. Pass `log: false` to disable, or your own function.
+Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance or for a function that returns ENSIP-10 records. It logs startup, every response, every error, and shutdown. Pass `log: false` to disable, or your own function.
 
 ```ts
 import { serveEZCCIP } from "@namestone/ezccip/serve";
 
-const ccip = serveEZCCIP(ezccip, { port: 8016 }); // default: random port
+const ccip = await serveEZCCIP(ezccip, { port: 8016 }); // default: random port
 // 2026-01-01T00:00:00.000Z Serving "tor" 0xd00d726b2aD6C81E894DC6B87BE6Ce9c5572D2cd http://localhost:8016
 // 2026-01-01T00:00:01.000Z ::1 / resolve(raffy.eth).text(name)
 ccip.endpoint; // "http://localhost:8016"
@@ -97,7 +97,7 @@ await ccip.shutdown();
 // 2026-01-01T00:00:02.000Z Shutdown<2000ms>
 
 // minimal example: fixed text() for any name
-await using ccip = serveEZCCIP(() => ({ text: () => "Raffy" }), { signer: privateKey });
+await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), { signer: privateKey });
 ```
 
 ### Serving with fetch
@@ -196,7 +196,7 @@ bun run build  # dist/
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
-- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP()` (Bun-only, synchronous, no default signing key); or use `ezccip.fetch` with any server
+- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP()` (no default signing key; `server` is still a `node:http` server); or use `ezccip.fetch` with any server
 - `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx) => ...)`
 - handlers receive `(args, ctx)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
 - extra context keys &rarr; one custom object, `ctx.extra`

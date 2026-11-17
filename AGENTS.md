@@ -18,7 +18,7 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 
 ## Stack and constraints
 
-- **Bun** for tooling and tests. The library itself is runtime-agnostic except `src/serve.ts` (uses `Bun.serve`).
+- **Bun** for tooling and tests. The library itself is runtime-agnostic: core code only uses web standards (`Request`, `Response`, `URL`), and `src/serve.ts` only uses `node:http`, which Node, Bun, and Deno all support. Never use `Bun.*` APIs in `src/`. Build types are `["node"]`, so emitted `.d.ts` files don't depend on Bun types.
 - **viem** is a **peer dependency**: use it for all ABI coding, hashing, addresses, and signing. Do not add ethers, ox (directly), or other crypto libraries.
 - **abitype** is a dependency for types only (`AbiParametersToPrimitiveTypes`), since viem does not re-export it.
 - **TypeScript 7** (`tsc` is the native compiler), `strict` + `noUncheckedIndexedAccess`.
@@ -37,7 +37,7 @@ src/
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
   errors.ts     CCIPReadError (carries HTTP status), encodeErrorString
-  serve.ts      serveEZCCIP(): Bun-only quick server, separate export "@namestone/ezccip/serve"
+  serve.ts      serveEZCCIP(): node:http quick server (Node, Bun, Deno), separate export "@namestone/ezccip/serve"
   utils.ts      small internal helpers (some re-exported, eg. asciiize)
   ens/
     abi.ts      RESOLVE_ABI and its items (RESOLVE, MULTICALL, errors)
@@ -71,5 +71,5 @@ These layouts must match the onchain verifiers. `test/signing.test.ts` pins them
 
 ## Testing
 
-- Prefer calling `ezccip.fetch(new Request(...))` directly over starting servers. Use `Bun.serve({ port: 0 })` only for end-to-end tests (eg. viem `ccipRequest` interop), and always stop it.
+- Prefer calling `ezccip.fetch(new Request(...))` directly over starting servers. Use `Bun.serve({ port: 0 })` or `serveEZCCIP()` only for end-to-end tests (eg. viem `ccipRequest` interop), and always stop it.
 - Build calldata with viem (`encodeFunctionData`, `parseAbiItem`) rather than hand-written hex.

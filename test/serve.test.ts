@@ -5,22 +5,29 @@ import { EZCCIP, verifyResponse } from "../src/index.js";
 import { serveEZCCIP } from "../src/serve.js";
 
 const SENDER = "0x0000000000000000000000000000000000000001";
+const ORIGIN = "0x0000000000000000000000000000000000000002";
 const f = parseAbiItem("function f(uint256 x) returns (uint256)");
 const fail = parseAbiItem("function fail()");
+const getOrigin = parseAbiItem("function getOrigin() returns (address)");
 
-function post(endpoint: string, data: Hex) {
-	return fetch(endpoint, { method: "POST", body: JSON.stringify({ sender: SENDER, data }) });
+function post(url: string, data: Hex) {
+	return fetch(url, { method: "POST", body: JSON.stringify({ sender: SENDER, data }) });
+}
+
+function make() {
+	const ezccip = new EZCCIP();
+	ezccip.addHandler(f, ([x]) => [x + 1n]);
+	ezccip.addHandler(getOrigin, (_, ctx) => [ctx.origin]);
+	ezccip.addHandler(fail, () => {
+		throw new Error("chonk");
+	});
+	return ezccip;
 }
 
 describe("serveEZCCIP", () => {
-	test("instance + logging", async () => {
+	test("logging", async () => {
 		const lines: string[] = [];
-		const ezccip = new EZCCIP();
-		ezccip.addHandler(f, ([x]) => [x + 1n]);
-		ezccip.addHandler(fail, () => {
-			throw new Error("chonk");
-		});
-		const ccip = serveEZCCIP(ezccip, { log: (...a) => lines.push(a.map(String).join(" ")) });
+		const ccip = await serveEZCCIP(make(), { log: (...a) => lines.push(a.map(String).join(" ")) });
 		expect(ccip.endpoint).toBe(`http://localhost:${ccip.port}`);
 		expect(ccip.signer).toBeUndefined();
 		expect(ccip.context).toBe(ccip.endpoint);
@@ -38,10 +45,26 @@ describe("serveEZCCIP", () => {
 		expect(lines[3]).toMatch(/^Shutdown<\d+ms>$/);
 	});
 
+	test("request conversion", async () => {
+		await using ccip = await serveEZCCIP(make(), { log: false });
+		// origin from path
+		const res = await post(`${ccip.endpoint}/${ORIGIN}`, toFunctionSelector(getOrigin));
+		expect(decodeFunctionResult({ abi: [getOrigin], data: ((await res.json()) as { data: Hex }).data })).toBe(ORIGIN);
+		// GET
+		const get = await fetch(`${ccip.endpoint}/${SENDER}/${toFunctionSelector(getOrigin)}.json`);
+		expect(get.status).toBe(200);
+		// CORS preflight
+		const preflight = await fetch(ccip.endpoint, { method: "OPTIONS" });
+		expect(preflight.status).toBe(204);
+		expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+		// bad JSON
+		expect((await fetch(ccip.endpoint, { method: "POST", body: "{" })).status).toBe(400);
+	});
+
 	test("record function + signer", async () => {
 		const privateKey = generatePrivateKey();
 		const { address } = privateKeyToAccount(privateKey);
-		await using ccip = serveEZCCIP(() => ({ text: () => "Raffy" }), {
+		await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }), {
 			signer: privateKey,
 			protocol: "tor",
 			log: false,
@@ -55,7 +78,7 @@ describe("serveEZCCIP", () => {
 	test("verify over http", async () => {
 		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
 		ezccip.addHandler(f, ([x]) => [x]);
-		await using ccip = serveEZCCIP(ezccip, { log: false });
+		await using ccip = await serveEZCCIP(ezccip, { log: false });
 		const request = encodeFunctionData({ abi: [f], args: [7n] });
 		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex };
 		const { result, signer } = await verifyResponse({ protocol: "ens", response, request, origin: SENDER });
@@ -63,10 +86,17 @@ describe("serveEZCCIP", () => {
 		expect(decodeFunctionResult({ abi: [f], data: result })).toBe(7n);
 	});
 
-	test("shutdown is idempotent", async () => {
-		const ccip = serveEZCCIP(new EZCCIP(), { log: false });
+	test("shutdown is idempotent and closes keep-alive connections", async () => {
+		const ccip = await serveEZCCIP(make(), { log: false });
+		await post(ccip.endpoint, encodeFunctionData({ abi: [f], args: [1n] })); // leaves a keep-alive connection
 		expect(ccip.shutdown()).toBe(ccip.shutdown());
 		await ccip.shutdown();
+		expect(ccip.server.listening).toBe(false);
 		expect(fetch(ccip.endpoint)).rejects.toThrow();
+	});
+
+	test("port in use", async () => {
+		await using a = await serveEZCCIP(make(), { log: false });
+		expect(serveEZCCIP(make(), { port: a.port, log: false })).rejects.toThrow();
 	});
 });
