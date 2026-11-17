@@ -47,9 +47,10 @@ async function call(ezccip: EZCCIP, abiFunction: AbiFunction, args: readonly unk
 describe("addHandler", () => {
 	test("signature", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256 c)", (args, ctx) => {
+		const handler = ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256 c)", (args, ctx, extra) => {
 			expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
-			expectTypeOf(ctx).toEqualTypeOf<CallContext<undefined>>();
+			expectTypeOf(ctx).toEqualTypeOf<CallContext>();
+			expectTypeOf(extra).toEqualTypeOf<undefined>();
 			expectTypeOf(ctx.sender).toEqualTypeOf<Address>();
 			const [a, b] = args;
 			return [a + b];
@@ -176,7 +177,6 @@ describe("handleRead", () => {
 			expect(ctx.ttl).toBe(5);
 			expect(ctx.protocol).toBe("raw");
 			expect(ctx.signer).toBeUndefined();
-			expect(ctx.extra).toBeUndefined();
 			return [ctx.sender, ctx.origin];
 		});
 		const origin = "0x0000000000000000000000000000000000000002";
@@ -185,9 +185,25 @@ describe("handleRead", () => {
 		expect(decodeFunctionResult({ abi: [fn], data: res.data })).toEqual([sender, origin]);
 	});
 
+	test("extra reaches multicall subcalls and resolve()", async () => {
+		const ezccip = new EZCCIP<{ suffix: string }>();
+		const text = parseAbiItem("function text(bytes32, string) returns (string)");
+		const f = ezccip.addHandler("function f() returns (string)", (_, __, extra) => [`f${extra.suffix}`]);
+		ezccip.enableENSIP10({ resolve: (name, _, extra) => ({ text: () => `${name}${extra.suffix}` }) });
+		const resolve = encode(RESOLVE, [bytesToHex(packetToBytes("a.eth")), encode(text, [pad("0x"), "k"])]);
+		const { data } = await ezccip.handleRead({
+			sender,
+			data: encode(MULTICALL, [[f.selector, resolve]]),
+			extra: { suffix: "!" },
+		});
+		const [a, b] = decodeFunctionResult({ abi: [MULTICALL], data });
+		expect(decodeFunctionResult({ abi: [f.abiFunction], data: a! })).toBe("f!");
+		expect(decodeFunctionResult({ abi: [text], data: b! })).toBe("a.eth!");
+	});
+
 	test("extra", async () => {
 		const ezccip = new EZCCIP<{ env: { greeting: string } }>();
-		const handler = ezccip.addHandler("f() returns (string)", (_, ctx) => [ctx.extra.env.greeting]);
+		const handler = ezccip.addHandler("f() returns (string)", (_, __, extra) => [extra.env.greeting]);
 		// @ts-expect-error extra is required
 		() => ezccip.handleRead({ sender, data: handler.selector });
 		const { data } = await ezccip.handleRead({ sender, data: handler.selector, extra: { env: { greeting: "hello" } } });
@@ -309,8 +325,9 @@ describe("enableENSIP10", () => {
 	test("resolve", async () => {
 		const ezccip = new EZCCIP();
 		ezccip.enableENSIP10({
-			resolve(name, ctx) {
-				expectTypeOf(ctx).toEqualTypeOf<CallContext<undefined>>();
+			resolve(name, ctx, extra) {
+				expectTypeOf(ctx).toEqualTypeOf<CallContext>();
+				expectTypeOf(extra).toEqualTypeOf<undefined>();
 				return { text: (key) => `${name}:${key}` };
 			},
 		});

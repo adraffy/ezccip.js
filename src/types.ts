@@ -15,10 +15,17 @@ export type HandlerResult<abiFunction extends AbiFunction = AbiFunction> =
 	| BytesLike
 	| (abiFunction["outputs"] extends readonly [] ? void : never);
 
-/** Implementation of an offchain function: `(args, ctx) => result`. */
+/**
+ * Implementation of an offchain function: `(args, ctx, extra) => result`.
+ *
+ * @param args - Decoded arguments.
+ * @param ctx - This call's context.
+ * @param extra - Custom object passed with the request, eg. `{ env }` on Cloudflare.
+ */
 export type HandlerFunction<abiFunction extends AbiFunction = AbiFunction, extra = undefined> = (
 	args: AbiParametersToPrimitiveTypes<abiFunction["inputs"]>,
-	ctx: CallContext<extra>,
+	ctx: CallContext,
+	extra: extra,
 ) => Awaitable<HandlerResult<abiFunction>>;
 
 /** A function added with `addHandler()`. */

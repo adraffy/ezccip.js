@@ -29,7 +29,7 @@ import { type Protocol, type Signer, type SignerLike, signResponse, toSigner } f
 import type { BytesLike, ExtraParameter, Handler, HandlerFunction } from "./types.js";
 import { bytesLikeToHex, getSelector, stripSelector } from "./utils.js";
 
-export type EZCCIPOptions<extra = undefined> = RequestHooks<extra> & {
+export type EZCCIPOptions = RequestHooks & {
 	/** Default signer: a private key or eg. a viem `LocalAccount`. */
 	signer?: SignerLike | undefined;
 	/** Default protocol. (default: `"ens"` with a signer, otherwise `"raw"`) */
@@ -58,11 +58,11 @@ export type HandleReadParameters<extra = undefined> = ExtraParameter<extra> & {
 	request?: Request | undefined;
 };
 
-export type HandleReadReturnType<extra = undefined> = {
+export type HandleReadReturnType = {
 	/** ABI-encoded response for EIP-3668. */
 	data: Hex;
 	/** Context of the outer call. Its `history` describes the whole response. */
-	context: CallContext<extra>;
+	context: CallContext;
 };
 
 /** `(request) => response`, only when `extra` is optional. Otherwise use {@link EZCCIP.handleRequest}. */
@@ -88,7 +88,7 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
  * export default { fetch: ezccip.fetch };
  * ```
  *
- * @typeParam extra - Custom object passed with each request, available as `ctx.extra`.
+ * @typeParam extra - Custom object passed with each request, given to handlers as their third argument.
  */
 export class EZCCIP<extra = undefined> {
 	readonly #signer: Signer | undefined;
@@ -96,10 +96,10 @@ export class EZCCIP<extra = undefined> {
 	readonly #ttl: number;
 	readonly #origin: Address | undefined;
 	readonly #parseOrigin: (url: URL) => Address | undefined;
-	readonly #hooks: RequestHooks<extra>;
+	readonly #hooks: RequestHooks;
 	readonly #handlers = new Map<Hex, Handler<any, extra>>();
 
-	constructor({ signer, protocol, ttl = 60, origin, parseOrigin, onResponse, onError }: EZCCIPOptions<extra> = {}) {
+	constructor({ signer, protocol, ttl = 60, origin, parseOrigin, onResponse, onError }: EZCCIPOptions = {}) {
 		if (origin !== undefined && !isAddress(origin, { strict: false })) throw new TypeError(`invalid origin: ${origin}`);
 		this.#signer = signer ? toSigner(signer) : undefined;
 		this.#protocol = protocol;
@@ -107,10 +107,10 @@ export class EZCCIP<extra = undefined> {
 		this.#origin = origin && getAddress(origin);
 		this.#parseOrigin = parseOrigin ?? ((url) => originFromPath(url.pathname));
 		this.#hooks = { onResponse, onError };
-		this.addHandler(MULTICALL, async ([calls], ctx) => {
+		this.addHandler(MULTICALL, async ([calls], ctx, extra) => {
 			ctx.history.show = false;
 			const results = calls.map((call) =>
-				this.#call(ctx.nested(call, ctx.history.addChild()), true).catch(encodeErrorString),
+				this.#call(ctx.nested(call, ctx.history.addChild()), extra, true).catch(encodeErrorString),
 			);
 			return [await Promise.all(results)];
 		});
@@ -197,21 +197,20 @@ export class EZCCIP<extra = undefined> {
 	 * console.log(context.history.toString());
 	 * ```
 	 */
-	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType<extra>> {
+	async handleRead(parameters: HandleReadParameters<extra>): Promise<HandleReadReturnType> {
 		const context = this.#createContext(parameters);
-		return { data: await this.#respond(context), context };
+		return { data: await this.#respond(context, parameters.extra as extra), context };
 	}
 
-	#createContext(parameters: HandleReadParameters<extra>): CallContext<extra> {
+	#createContext(parameters: Omit<HandleReadParameters, "extra">): CallContext {
 		const { sender, data } = parameters;
 		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
 		if (!isHex(data) || data.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
 		const origin = parameters.origin ?? this.#origin ?? sender;
 		if (!isAddress(origin, { strict: false })) throw new CCIPReadError("invalid origin", { status: 400 });
-		const state: ReadState<extra> = {
+		const state: ReadState = {
 			sender: getAddress(sender),
 			request: parameters.request,
-			extra: parameters.extra as extra,
 			origin: getAddress(origin),
 			protocol: parameters.protocol ?? this.#protocol,
 			signer: parameters.signer ? toSigner(parameters.signer) : this.#signer,
@@ -220,8 +219,8 @@ export class EZCCIP<extra = undefined> {
 		return new CallContext(state, data.toLowerCase() as Hex, new History());
 	}
 
-	async #respond(ctx: CallContext<extra>): Promise<Hex> {
-		const result = await this.#call(ctx, false);
+	async #respond(ctx: CallContext, extra: extra): Promise<Hex> {
+		const result = await this.#call(ctx, extra, false);
 		const { protocol, signer } = ctx;
 		if (protocol === "raw") return result;
 		if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
@@ -235,7 +234,7 @@ export class EZCCIP<extra = undefined> {
 		});
 	}
 
-	async #call(ctx: CallContext<extra>, isSubcall: boolean): Promise<Hex> {
+	async #call(ctx: CallContext, extra: extra, isSubcall: boolean): Promise<Hex> {
 		const { calldata, history } = ctx;
 		try {
 			const selector = getSelector(calldata);
@@ -249,7 +248,7 @@ export class EZCCIP<extra = undefined> {
 			} catch (cause) {
 				throw new CCIPReadError("invalid calldata", { status: 400, cause });
 			}
-			const result = await handler.fn(history.args as never, ctx);
+			const result = await handler.fn(history.args as never, ctx, extra);
 			if (!result) return "0x"; // returns ()
 			if (Array.isArray(result)) return encodeAbiParameters(handler.abiFunction.outputs, result as never);
 			return bytesLikeToHex(result as BytesLike); // already encoded
@@ -282,18 +281,12 @@ export class EZCCIP<extra = undefined> {
 		}
 		const url = new URL(request.url);
 		const hooks = [this.#hooks, options];
-		let context: CallContext<extra> | undefined;
+		let context: CallContext | undefined;
 		let data: Hex;
 		try {
 			const { sender, data: calldata } = await parseCCIPReadRequest(request);
-			context = this.#createContext({
-				sender,
-				data: calldata,
-				origin: this.#parseOrigin(url),
-				request,
-				extra: options?.extra,
-			} as HandleReadParameters<extra>);
-			data = await this.#respond(context);
+			context = this.#createContext({ sender, data: calldata, origin: this.#parseOrigin(url), request });
+			data = await this.#respond(context, options?.extra as extra);
 		} catch (error) {
 			const status = error instanceof CCIPReadError ? error.status : 500;
 			for (const x of hooks) callHook(x?.onError, { request, url, error, status, context });

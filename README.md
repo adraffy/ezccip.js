@@ -66,14 +66,15 @@ export default { fetch: ezccip.fetch }; // bound fetch() handler
 
 ### Handlers
 
-`(args, ctx) => result`
+`(args, ctx, extra) => result`
 
 - `args` &mdash; decoded arguments
 - `ctx` &mdash; a `CallContext`, one per call:
   - `calldata` &mdash; this call's calldata
   - `history` &mdash; this call's log entry: set `show` or `name` to change how it's logged
-  - `sender`, `request` (the HTTP `Request`, if any), `extra` (your custom object) &mdash; shared by the whole request
+  - `sender`, `request` (the HTTP `Request`, if any) &mdash; shared by the whole request
   - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Also shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response. The protocol is chosen after handlers run, so setting `ctx.signer` alone switches the default to `"ens"`
+- `extra` &mdash; your custom object for this request (eg. `{ env }`), see [Serving with fetch](#serving-with-fetch); `undefined` unless you declare `EZCCIP<Extra>`
 - `result` &mdash; tuple of outputs (ABI-encoded for you) or already-encoded `Hex | Uint8Array`. Functions without outputs may return nothing
 
 #### Errors
@@ -132,11 +133,11 @@ import { serve } from "@hono/node-server";
 serve({ port: 8000, fetch: ezccip.fetch });
 ```
 
-Need per-request data (eg. Cloudflare `env`)? Type it, pass it to `handleRequest()`, and read it from `ctx.extra`:
+Need per-request data (eg. Cloudflare `env`)? Type it, pass it to `handleRequest()`, and handlers (and `resolve`) receive it as their third argument:
 
 ```ts
 const ezccip = new EZCCIP<{ env: Env }>();
-ezccip.addHandler("function f() returns (string)", (_, ctx) => [ctx.extra.env.NAME]);
+ezccip.addHandler("function f() returns (string)", (_, ctx, { env }) => [env.NAME]);
 export default {
 	fetch: (request: Request, env: Env) => ezccip.handleRequest(request, { extra: { env } }),
 };
@@ -213,9 +214,9 @@ bun run build  # dist/
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
 - `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP({ resolve, ...options })` (no default signing key; `server` is still a `node:http` server; `signer`/`context` &rarr; `ezccip.signerAddress`/`torContext`); or use `ezccip.fetch` with any server
-- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx) => ...)`
-- handlers receive `(args, ctx)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
-- extra context keys &rarr; one custom object, `ctx.extra`
+- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, extra) => ...)`
+- handlers receive `(args, ctx, extra)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
+- extra context keys &rarr; one custom object, passed to handlers as the third argument: `(args, ctx, extra)`
 - `ctx.calldata` is the current call's calldata (inside `multicall`, the subcall)
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`
 - `addr()` values for EVM coin types must be 20 bytes (were truncated or padded)

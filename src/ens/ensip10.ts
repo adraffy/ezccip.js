@@ -214,7 +214,7 @@ function formatContentTypes(contentTypes: bigint) {
 }
 
 /** Looks up the record for a name. Return nothing if the name does not exist. */
-export type GetRecord<extra = undefined> = (name: string, ctx: CallContext<extra>) => Maybe<ENSRecord>;
+export type GetRecord<extra = undefined> = (name: string, ctx: CallContext, extra: extra) => Maybe<ENSRecord>;
 
 export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
 	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
@@ -235,10 +235,10 @@ export function createENSIP10Handler<extra = undefined>({
 	unreachableAsEmpty,
 	...options
 }: ENSIP10Parameters<extra>): HandlerFunction<typeof RESOLVE, extra> {
-	return async ([dnsname, data], ctx) => {
+	return async ([dnsname, data], ctx, extra) => {
 		const name = dnsDecode(dnsname).join(".");
 		ctx.history.show = [name];
-		const record = await resolve(name, ctx);
+		const record = await resolve(name, ctx, extra);
 		if (!record && !unreachableAsEmpty) {
 			ctx.history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });

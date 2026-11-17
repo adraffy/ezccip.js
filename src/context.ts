@@ -3,10 +3,9 @@ import type { History } from "./history.js";
 import { type Protocol, type Signer, type SignerLike, toSigner } from "./signing.js";
 
 /** Request-wide state, shared by every {@link CallContext} of a request. */
-export type ReadState<extra = undefined> = {
+export type ReadState = {
 	readonly sender: Address;
 	readonly request: Request | undefined;
-	readonly extra: extra;
 	origin: Address;
 	/** `undefined` means: `"ens"` with a signer, otherwise `"raw"`. */
 	protocol: Protocol | undefined;
@@ -24,17 +23,15 @@ export function defaultProtocol(signer: Signer | undefined): Protocol {
  *
  * `calldata` and `history` belong to this call. Everything else is shared by the whole request:
  * setting `ctx.protocol` in any call changes how the entire response is signed.
- *
- * @typeParam extra - Custom object passed with each request, eg. `{ env }` on Cloudflare.
  */
-export class CallContext<extra = undefined> {
-	readonly #state: ReadState<extra>;
+export class CallContext {
+	readonly #state: ReadState;
 	/** Calldata of this call. */
 	readonly calldata: Hex;
 	/** Log entry for this call. */
 	readonly history: History;
 
-	constructor(state: ReadState<extra>, calldata: Hex, history: History) {
+	constructor(state: ReadState, calldata: Hex, history: History) {
 		this.#state = state;
 		this.calldata = calldata;
 		this.history = history;
@@ -42,7 +39,7 @@ export class CallContext<extra = undefined> {
 	}
 
 	/** Creates the context for a call made inside this one. */
-	nested(calldata: Hex, history: History): CallContext<extra> {
+	nested(calldata: Hex, history: History): CallContext {
 		return new CallContext(this.#state, calldata, history);
 	}
 
@@ -53,10 +50,6 @@ export class CallContext<extra = undefined> {
 	/** The HTTP request, if any. */
 	get request(): Request | undefined {
 		return this.#state.request;
-	}
-	/** Custom object passed with the request. */
-	get extra(): extra {
-		return this.#state.extra;
 	}
 
 	/** Contract that will verify the response. */

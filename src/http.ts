@@ -5,32 +5,32 @@ import type { HandleReadReturnType } from "./ezccip.js";
 import type { ExtraParameter } from "./types.js";
 
 /** Passed to {@link RequestHooks.onResponse} after a successful response. */
-export type RequestSuccessEvent<extra = undefined> = HandleReadReturnType<extra> & {
+export type RequestSuccessEvent = HandleReadReturnType & {
 	request: Request;
 	url: URL;
 };
 
 /** Passed to {@link RequestHooks.onError} after a failed response. */
-export type RequestErrorEvent<extra = undefined> = {
+export type RequestErrorEvent = {
 	request: Request;
 	url: URL;
 	error: unknown;
 	/** HTTP status of the response. */
 	status: number;
 	/** Context of the outer call, if the request got that far. Its `history` shows which call failed. */
-	context: CallContext<extra> | undefined;
+	context: CallContext | undefined;
 };
 
 /**
  * Observers for HTTP requests, eg. for logging or metrics.
  * Exceptions thrown by hooks and rejections of async hooks are ignored.
  */
-export type RequestHooks<extra = undefined> = {
-	onResponse?: ((event: RequestSuccessEvent<extra>) => unknown) | undefined;
-	onError?: ((event: RequestErrorEvent<extra>) => unknown) | undefined;
+export type RequestHooks = {
+	onResponse?: ((event: RequestSuccessEvent) => unknown) | undefined;
+	onError?: ((event: RequestErrorEvent) => unknown) | undefined;
 };
 
-export type HandleRequestOptions<extra = undefined> = RequestHooks<extra> & ExtraParameter<extra>;
+export type HandleRequestOptions<extra = undefined> = RequestHooks & ExtraParameter<extra>;
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request parsed from HTTP. */
 export type CCIPReadRequest = { sender: Hex; data: Hex };

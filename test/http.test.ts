@@ -170,7 +170,7 @@ describe("hooks", () => {
 
 test("extra context", async () => {
 	const ezccip = new EZCCIP<{ env: { name: string } }>();
-	const fn = ezccip.addHandler("function f() returns (string)", (_, ctx) => [ctx.extra.env.name]);
+	const fn = ezccip.addHandler("function f() returns (string)", (_, __, extra) => [extra.env.name]);
 	const request = new Request("http://localhost/", {
 		method: "POST",
 		body: JSON.stringify({ sender: SENDER, data: fn.selector }),
