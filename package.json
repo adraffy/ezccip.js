@@ -2,30 +2,9 @@
 	"name": "@namestone/ezccip",
 	"version": "0.1.2",
 	"type": "module",
-	"scripts": {
-		"test": "node test/all.js",
-		"start": "node test/demo.js",
-		"build": "node build/make.js"
-	},
-	"dependencies": {
-		"ethers": "^6.15.0"
-	},
-	"devDependencies": {
-		"esbuild": "^0.25.5"
-	},
-	"exports": {
-		".": {
-			"import": "./dist/index.mjs",
-			"require": "./dist/index.cjs"
-		},
-		"./serve": {
-			"import": "./dist/serve.mjs",
-			"require": "./dist/serve.cjs"
-		}
-	},
-	"files": [
-		"./dist"
-	],
+	"description": "Turnkey CCIP-Read Handler",
+	"license": "MIT",
+	"author": "raffy.eth",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/namestonehq/ezccip.js.git"
@@ -34,9 +13,6 @@
 		"url": "https://github.com/namestonehq/ezccip.js/issues"
 	},
 	"homepage": "https://github.com/namestonehq/ezccip.js#readme",
-	"author": "raffy.eth",
-	"license": "MIT",
-	"description": "Turnkey CCIP-Read Handler",
 	"keywords": [
 		"ENS",
 		"Ethereum Naming System",
@@ -46,5 +22,32 @@
 		"CCIP",
 		"CCIP-Read",
 		"Offchain"
-	]
+	],
+	"scripts": {
+		"check": "tsc --noEmit",
+		"test": "bun test",
+		"start": "bun run demo.ts",
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
+		"prepublishOnly": "bun run check && bun test && bun run build"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"./dist",
+		"./src"
+	],
+	"sideEffects": false,
+	"dependencies": {
+		"abitype": "^1.3.0",
+		"ox": "^1.8.16"
+	},
+	"devDependencies": {
+		"@types/bun": "^1.4.4",
+		"typescript": "^7.0.2",
+		"viem": "^2.58.0"
+	}
 }
