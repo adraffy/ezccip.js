@@ -9,8 +9,6 @@ import {
 	parseCCIPReadRequest,
 } from "./http.js";
 
-export type FetchHandlerOptions = HTTPOptions;
-
 /**
  * Creates a `fetch(request, extra?) => response` handler for Bun, Deno, Cloudflare Workers, Hono, etc.
  * Answers `POST {sender, data}` and `GET .../{sender}/{data}.json` with `{data}`,
@@ -29,7 +27,7 @@ export type FetchHandlerOptions = HTTPOptions;
  */
 export function createFetchHandler(
 	ezccip: EZCCIP,
-	{ cors = true, log = false, parseOrigin = (url) => originFromPath(url.pathname) }: FetchHandlerOptions = {},
+	{ cors = true, log = false, parseOrigin = (url) => originFromPath(url.pathname) }: HTTPOptions = {},
 ): (request: Request, extra?: object) => Promise<Response> {
 	const headers = cors ? CORS_HEADERS : undefined;
 	return async (request, extra) => {

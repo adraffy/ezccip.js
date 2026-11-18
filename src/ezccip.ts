@@ -17,13 +17,21 @@ import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError, encodeErrorString } from "./errors.js";
 import { History } from "./history.js";
 import { checkProtocol, type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
-import type { BytesLike, Handler, HandlerFunction, ResponseOptions } from "./types.js";
+import type { BytesLike, Handler, HandlerFunction } from "./types.js";
 import { bytesLikeToHex, checkOrigin, checkTTL, decodeArgs, getSelector } from "./utils.js";
 
-/** Defaults for every request: `protocol`, `signer`, and `ttl`. */
-export type EZCCIPOptions = ResponseOptions;
+/** How responses are signed. `handleRequest()` can override them per request, and handlers on `ctx`. */
+export type EZCCIPOptions = {
+	/** (default: `"ens"` with a signer, otherwise `"raw"`) */
+	protocol?: Protocol | undefined;
+	/** A private key or eg. a viem `LocalAccount`. */
+	signer?: SignerLike | undefined;
+	/** Response lifetime in seconds. (default: 60) */
+	ttl?: number | undefined;
+};
 
-export type HandleRequestOptions = ResponseOptions & {
+/** Per-request overrides of {@link EZCCIPOptions}, plus the request's origin and extra values. */
+export type HandleRequestOptions = EZCCIPOptions & {
 	/** Contract that will verify the response. (default: `sender`) */
 	origin?: Address | undefined;
 	/** Custom values for handlers, as `ctx.extra`. (default: `{}`) */

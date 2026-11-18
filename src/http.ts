@@ -17,7 +17,7 @@ export type HTTPOptions = {
 	 * If it returns nothing, the origin is the `sender`. (default: {@link originFromPath})
 	 */
 	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
-	/** Log every response and error with `console.log`, prefixed by the date. */
+	/** Log every response and error with `console.log`, prefixed by the date. (default: `serveEZCCIP` true, `createFetchHandler` false) */
 	log?: boolean | undefined;
 };
 

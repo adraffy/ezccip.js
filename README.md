@@ -185,7 +185,7 @@ const record = {
 	text(key) { if (key === "name") return "raffy"; },
 	addr(coinType) { if (coinType === 60n) return "0x51050ec063d393217b436747617ad1c2285aeeee"; },
 };
-const res = await processENSIP10(record, calldata);
+const res = await processENSIP10(record, calldata); // (record, calldata, options?, history?)
 ```
 
 `addr()` values for EVM coin types (`60`, and [ENSIP-11](https://docs.ens.domains/ensip/11) chains including the default) must be 20 bytes or empty; anything else throws. Other coin types are returned as-is. Empty bytes (`"0x"`) count as no address, so the [ENSIP-19](https://docs.ens.domains/ensip/19) default address still applies.

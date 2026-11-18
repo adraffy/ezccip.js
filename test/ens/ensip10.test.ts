@@ -11,7 +11,14 @@ import {
 	toFunctionSelector,
 } from "viem";
 import { UNSUPPORTED_RESOLVER_PROFILE } from "../../src/ens/abi.js";
-import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, type ENSRecord, History, processENSIP10 } from "../../src/index.js";
+import {
+	COIN_TYPE_DEFAULT,
+	COIN_TYPE_ETH,
+	type ENSRecord,
+	History,
+	type ProcessENSIP10Options,
+	processENSIP10,
+} from "../../src/index.js";
 
 const NODE = pad("0x");
 
@@ -31,10 +38,11 @@ async function query<const fn extends AbiFunction>(
 	record: ENSRecord | undefined,
 	abiFunction: fn,
 	args: readonly unknown[],
-	options?: Parameters<typeof processENSIP10>[2],
+	options?: ProcessENSIP10Options,
+	history?: History,
 ) {
 	const calldata = encodeFunctionData({ abi: [abiFunction as AbiFunction], args } as never);
-	const result = await processENSIP10(record, calldata, options);
+	const result = await processENSIP10(record, calldata, options, history);
 	return decodeFunctionResult({ abi: [abiFunction as AbiFunction], data: result }) as unknown;
 }
 
@@ -153,7 +161,7 @@ describe("profiles", () => {
 			encodeFunctionData({ abi: [text], args: [NODE, "name"] }),
 			encodeFunctionData({ abi: [name], args: [NODE] }),
 		];
-		const [a, b] = (await query(record, multicall, [calls], { history })) as Hex[];
+		const [a, b] = (await query(record, multicall, [calls], {}, history)) as Hex[];
 		expect(decodeFunctionResult({ abi: [text], data: a! })).toBe("Raffy");
 		expect(decodeFunctionResult({ abi: [name], data: b! })).toBe("raffy.eth");
 		expect(String(history)).toBe("multicall()^2 [text(name) name()]");

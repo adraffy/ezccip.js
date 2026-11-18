@@ -28,8 +28,6 @@ export type ServeOptions = HTTPOptions & {
 	port?: number;
 	/** Interface to listen on. (default: all) */
 	hostname?: string;
-	/** Log startup, every response, every error, and shutdown with `console.log`, prefixed by the date. (default: true) */
-	log?: boolean;
 	/** Custom values for handlers, copied into `ctx.extra` of every request, along with the client's `ip`. */
 	extra?: Record<string, unknown>;
 };

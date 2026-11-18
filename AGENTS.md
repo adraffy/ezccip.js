@@ -33,7 +33,7 @@ src/
   index.ts      public API; explicit named exports only (no `export *`)
   ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
   context.ts    ReadContext: the request's shared, mutable state (ctx)
-  types.ts      shared public types: Handler, HandlerFunction, HandlerResult, ResponseOptions
+  types.ts      shared public types: Handler, HandlerFunction, HandlerResult, BytesLike
   http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS headers, describeError (internal)
   fetch.ts      createFetchHandler(): fetch(Request) => Response adapter
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse

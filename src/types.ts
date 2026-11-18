@@ -2,7 +2,6 @@ import type { AbiParametersToPrimitiveTypes } from "abitype";
 import type { AbiFunction, Hex } from "viem";
 import type { ReadContext } from "./context.js";
 import type { History } from "./history.js";
-import type { Protocol, SignerLike } from "./signing.js";
 
 export type Awaitable<T> = T | PromiseLike<T>;
 
@@ -37,14 +36,4 @@ export type Handler<abiFunction extends AbiFunction = AbiFunction> = {
 	/** eg. `"f(uint256,(bool,string)[])"` */
 	readonly signature: string;
 	readonly fn: HandlerFunction<abiFunction>;
-};
-
-/** How a response is signed. Defaults on `EZCCIP`, per request in `handleRequest()`, or set by handlers on `ctx`. */
-export type ResponseOptions = {
-	/** (default: `ezccip.protocol`, which is `"ens"` if constructed with a signer, otherwise `"raw"`) */
-	protocol?: Protocol | undefined;
-	/** A private key or eg. a viem `LocalAccount`. */
-	signer?: SignerLike | undefined;
-	/** Response lifetime in seconds. (default: 60) */
-	ttl?: number | undefined;
 };

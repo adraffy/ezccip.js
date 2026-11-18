@@ -4,7 +4,6 @@ export { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, chainFromCoinType } from "./ens/coin-
 export { dnsDecodeLabels, dnsDecodeName } from "./ens/dns.js";
 export {
 	createENSIP10Handler,
-	type ENSIP10Options,
 	type ENSIP10Parameters,
 	type ENSRecord,
 	type GetRecord,
@@ -13,7 +12,7 @@ export {
 } from "./ens/ensip10.js";
 export { CCIPReadError } from "./errors.js";
 export { EZCCIP, type EZCCIPOptions, type HandleRequestOptions, type HandleRequestReturnType } from "./ezccip.js";
-export { createFetchHandler, type FetchHandlerOptions } from "./fetch.js";
+export { createFetchHandler } from "./fetch.js";
 export { History } from "./history.js";
 export {
 	type CCIPReadRequest,
@@ -35,4 +34,4 @@ export {
 	type VerifyResponseParameters,
 	verifyResponse,
 } from "./signing.js";
-export type { BytesLike, Handler, HandlerFunction, HandlerResult, ResponseOptions } from "./types.js";
+export type { BytesLike, Handler, HandlerFunction, HandlerResult } from "./types.js";
