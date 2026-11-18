@@ -69,15 +69,16 @@ export type ProcessENSIP10Options = {
 
 /**
  * Answers ENSIP-10 resolver `calldata` from a record and returns the ABI-encoded result.
+ * Without a record, every profile answers empty.
  * Unsupported profiles are answered with `UnsupportedResolverProfile(bytes4)`.
  */
 export function processENSIP10(
-	record: ENSRecord,
+	record: ENSRecord | undefined,
 	calldata: Hex,
 	options: ProcessENSIP10Options = {},
 	history?: History,
 ): Promise<Hex> {
-	return answer(record, calldata, options, history, false);
+	return answer(record ?? {}, calldata, options, history, false);
 }
 
 async function answer(
@@ -226,12 +227,12 @@ export function createENSIP10Handler({
 	return async ([dnsname, data], ctx, history) => {
 		const name = dnsDecodeName(dnsname);
 		history.show = [name];
-		const record = await resolve(name, ctx, history);
+		const record = (await resolve(name, ctx, history)) ?? undefined; // null is nothing too
 		if (!record && !unreachableAsEmpty) {
 			history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}
 		// already encoded since: abi.decode(abi.encode(x)) == x
-		return processENSIP10(record ?? {}, data, options, history.addInner(data));
+		return processENSIP10(record, data, options, history.addInner(data));
 	};
 }
