@@ -269,6 +269,16 @@ describe("handleRead", () => {
 		expect((await ezccip.handleRequest(sender, handler.selector, { origin })).context.origin).toBe(origin);
 	});
 
+	test("chainId", async () => {
+		const ezccip = new EZCCIP();
+		const handler = ezccip.addFunctionHandler("function f()", () => {});
+		expect((await ezccip.handleRequest(sender, handler.selector)).context.chainId).toBeUndefined();
+		expect((await ezccip.handleRequest(sender, handler.selector, { chainId: 1 })).context.chainId).toBe(1);
+		for (const chainId of [-1, 1.5, Number.NaN, 2 ** 53]) {
+			expect(ezccip.handleRequest(sender, handler.selector, { chainId })).rejects.toMatchObject({ status: 400 });
+		}
+	});
+
 	test("validation", async () => {
 		expect(() => new EZCCIP({ ttl: Number.NaN })).toThrow("invalid ttl");
 		expect(() => new EZCCIP({ ttl: -1 })).toThrow("invalid ttl");

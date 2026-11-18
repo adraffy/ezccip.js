@@ -88,6 +88,7 @@ await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@adraffy/ez
 - `args` &mdash; decoded arguments
 - `ctx` &mdash; a `ReadContext`: one plain object shared by the whole request (every `multicall` subcall gets the same one)
   - `sender`, `calldata` &mdash; the request
+  - `chainId` &mdash; the origin's chain, if the request says (see [Sender vs Origin](#sender-vs-origin))
   - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Set them in any call to change the entire response; they're validated when signing. They start from the `handleRequest()` options, then the `EZCCIP` defaults. Setting `ctx.signer` doesn't change `ctx.protocol`
   - `extra` &mdash; custom values from the caller, eg. `ctx.extra.ip`, see [Extra](#extra)
 - `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
@@ -114,7 +115,7 @@ await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@adraffy/ez
 Both adapters answer `POST {sender, data}` and `GET .../{sender}/{data}.json` with `{data}`, or `{message}` and an HTTP status, and take the same options:
 
 - `cors` &mdash; add CORS headers and answer `OPTIONS` preflight requests (default: `true`)
-- `parseOrigin: (url: URL) => Address | undefined` &mdash; see [Sender vs Origin](#sender-vs-origin)
+- `parseOrigin: (url: URL) => { origin?, chainId? }` &mdash; default: `?origin=0x...&chainId=1`, see [Sender vs Origin](#sender-vs-origin)
 - `log` &mdash; log every response and error with `console.log`
 
 #### serveEZCCIP()
@@ -176,14 +177,16 @@ await ezccip.handleRequest(sender, calldata, { extra: { ip } });
 
 ### Sender vs Origin
 
-- ⚠️ `sender` may not be the originating contract
-  - see: [recursive CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668#recursive-calls-in-ccip-aware-contracts)
-- **Best Solution**: embed `origin` into the endpoint as a path component:
-  1.  `http://my.server/.../0xABCD/...`
-  1.  `origin = 0xABCD`
-  - this is what the HTTP adapters do by default; pass `parseOrigin: (url: URL) => Address | undefined` to replace it
-- or, pass `origin` to `handleRequest(sender, calldata, { origin })`
-- if there's no origin, `origin = sender`
+- ⚠️ `sender` may not be the contract that issued the request: `OffchainLookup` only carries `sender` and the URLs, and a lookup can be wrapped and rethrown (see [recursive CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668#recursive-calls-in-ccip-aware-contracts))
+- so the gateway URL is the only thing that identifies the contract, and its network
+- **Best Solution**: put them in the URL as query parameters (both optional):
+  1. `https://my.server/?chainId=1&origin=0xABCD...` (`GET`: `https://my.server/{sender}/{data}.json?chainId=1&origin=0xABCD...`)
+  1. `ctx.origin = 0xABCD...`, `ctx.chainId = 1`
+  - this is what the HTTP adapters do by default (`originFromQuery`); `chainId` must be decimal
+  - pass `parseOrigin: (url: URL) => { origin?, chainId? }` to read them some other way
+- or, pass them to `handleRequest(sender, calldata, { origin, chainId })`
+- if there's no origin, `origin = sender`; if there's no chain, `chainId` is `undefined`
+- `origin` is signed (`"ens"`, `"tor"`); `chainId` is only for handlers, eg. to pick which network to read
 
 ### Unknown names vs empty records
 
@@ -246,9 +249,10 @@ bun run smoke  # build, then run dist/ on Node
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`
 - `addr()` values for EVM coin types must be 20 bytes (were truncated or padded)
 - unknown functions are `404` and bad calldata `400` (both were `500`); non-`CCIPReadError` messages are hidden from clients
-- `handleRead(sender, calldata, config)` &rarr; `handleRequest(sender, calldata, { origin, protocol, signer, ttl, extra })`
+- `handleRead(sender, calldata, config)` &rarr; `handleRequest(sender, calldata, { origin, chainId, protocol, signer, ttl, extra })`
 - `log` / `formatError` options &rarr; `log: boolean` on `serveEZCCIP` (default on) and `createFetchHandler`
 - `serveEZCCIP` sets `ctx.extra.ip`; `context.url` is gone (use `parseOrigin` or call `handleRequest()` yourself)
+- the origin is read from the query (`?origin=0x...&chainId=1`), not the first `/0x...` path component; for existing URLs with the origin in the path, pass `parseOrigin: (url) => ({ origin: url.pathname.match(/\/(0x[0-9a-f]{40})(?=\/|$)/i)?.[1] })`
 - `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
 - `History` only builds the log line: set `name` or `show` (an array, or `false`); `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`
 - `ENSRecord.ABI(contentTypes)` receives a `bigint` and returns `type` as a `bigint`; `pubkey()` returns `x` and `y` as `bigint` or `Hex` (no `number`)

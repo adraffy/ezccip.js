@@ -14,7 +14,7 @@ import {
 	CORS_HEADERS,
 	describeError,
 	type HTTPOptions,
-	originFromPath,
+	originFromQuery,
 	PREFLIGHT_HEADERS,
 	parseCCIPReadBody,
 	parseCCIPReadPath,
@@ -76,14 +76,7 @@ export async function serveEZCCIP(
 		arg instanceof EZCCIP
 			? arg
 			: new EZCCIP({ ...options, signer: options.signer ?? generatePrivateKey() }).enableENSIP10({ resolve: arg });
-	const {
-		port = 0,
-		hostname,
-		log = true,
-		cors = true,
-		parseOrigin = (url) => originFromPath(url.pathname),
-		extra,
-	} = options;
+	const { port = 0, hostname, log = true, cors = true, parseOrigin = originFromQuery, extra } = options;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 	const headers = cors ? CORS_HEADERS : {};
 
@@ -97,7 +90,7 @@ export async function serveEZCCIP(
 		try {
 			const { sender, data: calldata } = await readRequest(req, url);
 			const { data, history } = await ezccip.handleRequest(sender, calldata, {
-				origin: parseOrigin(url),
+				...parseOrigin(url),
 				extra: { ...extra, ip },
 			});
 			print?.(ip, url.pathname, String(history));

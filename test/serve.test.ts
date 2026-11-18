@@ -50,8 +50,8 @@ describe("serveEZCCIP", () => {
 
 	test("request conversion", async () => {
 		await using ccip = await serveEZCCIP(make(), { log: false });
-		// origin from path
-		const res = await post(`${ccip.endpoint}/${ORIGIN}`, toFunctionSelector(getOrigin));
+		// origin from the query
+		const res = await post(`${ccip.endpoint}/?origin=${ORIGIN}`, toFunctionSelector(getOrigin));
 		expect(decodeFunctionResult({ abi: [getOrigin], data: ((await res.json()) as { data: Hex }).data })).toBe(ORIGIN);
 		// GET
 		const get = await fetch(`${ccip.endpoint}/${SENDER}/${toFunctionSelector(getOrigin)}.json`);
@@ -67,14 +67,14 @@ describe("serveEZCCIP", () => {
 	test("parseOrigin", async () => {
 		await using ccip = await serveEZCCIP(make(), {
 			log: false,
-			parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined,
+			parseOrigin: (url) => ({ origin: (url.searchParams.get("o") as Hex | null) ?? undefined }),
 		});
 		const originOf = async (path: string) => {
 			const res = await post(`${ccip.endpoint}${path}`, toFunctionSelector(getOrigin));
 			return decodeFunctionResult({ abi: [getOrigin], data: ((await res.json()) as { data: Hex }).data });
 		};
 		expect(await originOf(`/?o=${ORIGIN}`)).toBe(ORIGIN);
-		expect(await originOf(`/${ORIGIN}`)).toBe(SENDER); // replaces the path heuristic
+		expect(await originOf(`/?origin=${ORIGIN}`)).toBe(SENDER); // replaces the default
 	});
 
 	test("extra: ip and custom values", async () => {

@@ -38,6 +38,8 @@ export type EZCCIPOptions = {
 export type HandleRequestOptions = EZCCIPOptions & {
 	/** Contract that will verify the response. (default: `sender`) */
 	origin?: Address | undefined;
+	/** Chain of the origin, if known. */
+	chainId?: number | undefined;
 	/** Custom values for handlers, as `ctx.extra`. (default: `{}`) */
 	extra?: Record<string, unknown> | undefined;
 };
@@ -196,16 +198,20 @@ export class EZCCIP {
 	async handleRequest(
 		sender: Hex,
 		calldata: Hex,
-		{ origin = sender, protocol, signer, ttl, extra = {} }: HandleRequestOptions = {},
+		{ origin = sender, chainId, protocol, signer, ttl, extra = {} }: HandleRequestOptions = {},
 	): Promise<HandleRequestReturnType> {
 		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
 		if (!isHex(calldata) || calldata.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
 		if (!isAddress(origin, { strict: false })) throw new CCIPReadError("invalid origin", { status: 400 });
+		if (chainId !== undefined && !(Number.isSafeInteger(chainId) && chainId >= 0)) {
+			throw new CCIPReadError("invalid chainId", { status: 400 });
+		}
 		calldata = calldata.toLowerCase() as Hex;
 		const context: ReadContext = {
 			sender: getAddress(sender),
 			calldata,
 			origin: getAddress(origin),
+			chainId,
 			protocol: protocol ?? this.#protocol,
 			signer: signer ?? this.#signer,
 			ttl: ttl ?? this.#ttl,

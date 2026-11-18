@@ -13,6 +13,8 @@ export type ReadContext = {
 	readonly calldata: Hex;
 	/** Contract that will verify the response. */
 	origin: Address;
+	/** Chain of the origin, if the request says, eg. from the gateway URL. */
+	readonly chainId: number | undefined;
 	/** Signing protocol. */
 	protocol: Protocol;
 	/** A private key or eg. a viem `LocalAccount`. */

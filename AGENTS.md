@@ -34,7 +34,7 @@ src/
   ezccip.ts     EZCCIP class: addFunctionHandler/addAbiHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
   context.ts    ReadContext: the request's shared, mutable state (ctx)
   types.ts      shared public types: Handler, HandlerFunction, HandlerResult, BytesLike
-  http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS headers, describeError (internal)
+  http.ts       shared HTTP pieces: parse GET path / POST body, originFromQuery, CORS headers, describeError (internal)
   fetch.ts      createFetchHandler(): fetch(Request) => Response adapter
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
@@ -69,7 +69,8 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 - **Errors**: `CCIPReadError` messages and statuses reach clients (400 bad input, 404 unknown function/profile, 405 method). Any other error is a 500 with message `"internal error"` (see `publicErrorMessage`), and the real error goes to `onError` and `History`. Inside `multicall`, failed subcalls are encoded as `Error(string)` using the same rule.
 - **Generic naming** follows viem: lowercase type parameters (`abiFunction`, `extra`), `XParameters` / `XReturnType` for function inputs and outputs, object parameters for public functions with more than two inputs.
 - **`extra`** is `ctx.extra: Record<string, unknown>`, not generic. Callers of `handleRequest()` fill it: `serveEZCCIP` copies its `extra` option and sets `ip`; `createFetchHandler` copies the fields of its second argument (eg. Cloudflare `env`).
-- **Core has no HTTP.** `EZCCIP` knows nothing about `Request`, CORS, URLs, or origin parsing. `handleRequest(sender, calldata, { origin, protocol, signer, ttl, extra })` validates input, throws `CCIPReadError`s, and returns `{ data, context, history }`; origin defaults to `sender`. HTTP lives in the adapters, `createFetchHandler` (`src/fetch.ts`) and `serveEZCCIP` (`src/serve.ts`), which each do their own try/catch, logging, and response; they share only parsing helpers, CORS headers, and the options `cors`, `parseOrigin`, `log`. `serveEZCCIP` reads `{sender, data}` straight from the `node:http` request; don't route it through a fetch `Request`.
+- **Origin comes from the query**: `?origin=0x...&chainId=1` (`originFromQuery`, the default `parseOrigin`, which returns `{ origin?, chainId? }`). Don't parse addresses out of path components. `chainId` is `ctx.chainId` (readonly, not signed).
+- **Core has no HTTP.** `EZCCIP` knows nothing about `Request`, CORS, URLs, or origin parsing. `handleRequest(sender, calldata, { origin, chainId, protocol, signer, ttl, extra })` validates input, throws `CCIPReadError`s, and returns `{ data, context, history }`; origin defaults to `sender`. HTTP lives in the adapters, `createFetchHandler` (`src/fetch.ts`) and `serveEZCCIP` (`src/serve.ts`), which each do their own try/catch, logging, and response; they share only parsing helpers, CORS headers, and the options `cors`, `parseOrigin`, `log`. `serveEZCCIP` reads `{sender, data}` straight from the `node:http` request; don't route it through a fetch `Request`.
 - **No signal handlers or global side effects in `src/`.** `serveEZCCIP` logs, but process lifecycle belongs to the caller (see `scripts/demo.ts`).
 - Public API changes should update `README.md` (including the migration section) and `src/index.ts`.
 

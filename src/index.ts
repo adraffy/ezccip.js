@@ -17,10 +17,11 @@ export { History } from "./history.js";
 export {
 	type CCIPReadRequest,
 	type HTTPOptions,
-	originFromPath,
+	originFromQuery,
 	parseCCIPReadBody,
 	parseCCIPReadPath,
 	parseCCIPReadRequest,
+	type RequestOrigin,
 } from "./http.js";
 export {
 	getResponseHash,

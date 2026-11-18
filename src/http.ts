@@ -2,7 +2,7 @@
  * HTTP pieces shared by the adapters ({@link createFetchHandler} and `serveEZCCIP`).
  * @module
  */
-import { type Address, getAddress, type Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { CCIPReadError } from "./errors.js";
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request. */
@@ -13,10 +13,10 @@ export type HTTPOptions = {
 	/** Add CORS headers and answer `OPTIONS` preflight requests. (default: true) */
 	cors?: boolean | undefined;
 	/**
-	 * Finds the origin (the contract that verifies the response) in the request URL.
-	 * If it returns nothing, the origin is the `sender`. (default: {@link originFromPath})
+	 * Finds the contract that issued the request, and its chain, in the request URL.
+	 * Without an origin, the origin is the `sender`. (default: {@link originFromQuery})
 	 */
-	parseOrigin?: ((url: URL) => Address | undefined) | undefined;
+	parseOrigin?: ((url: URL) => RequestOrigin) | undefined;
 	/** Log every response and error with `console.log`, prefixed by the date. (default: `serveEZCCIP` true, `createFetchHandler` false) */
 	log?: boolean | undefined;
 };
@@ -62,10 +62,25 @@ export async function parseCCIPReadRequest(request: Request): Promise<CCIPReadRe
 	}
 }
 
-/** Returns the first `/0x{40}` component of a path, eg. `/a/0xABCD.../b`. The default `parseOrigin`. */
-export function originFromPath(path: string): Address | undefined {
-	const match = path.match(/\/(0x[0-9a-f]{40})(?=\/|$)/i);
-	return match ? getAddress(match[1]!) : undefined;
+/** The contract that issued a request, and its chain, if known. */
+export type RequestOrigin = {
+	/** Contract that will verify the response. */
+	origin?: Address | undefined;
+	/** Chain of that contract. */
+	chainId?: number | undefined;
+};
+
+/**
+ * Reads `?origin=0x...&chainId=1` from a URL. Both are optional. The default `parseOrigin`.
+ *
+ * `OffchainLookup` only identifies the `sender`, which may not be the contract that issued
+ * the request (it can be wrapped and rethrown), so put the origin and its chain in the gateway URL.
+ */
+export function originFromQuery(url: URL): RequestOrigin {
+	const origin = url.searchParams.get("origin") ?? undefined;
+	const chain = url.searchParams.get("chainId") ?? undefined;
+	if (chain !== undefined && !/^\d+$/.test(chain)) throw new CCIPReadError("invalid chainId", { status: 400 });
+	return { origin: origin as Address | undefined, chainId: chain === undefined ? undefined : Number(chain) };
 }
 
 /** @internal What to log for an error: the stack trace if unexpected, otherwise the message. */

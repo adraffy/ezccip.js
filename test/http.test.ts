@@ -15,7 +15,7 @@ import {
 	CCIPReadError,
 	createFetchHandler,
 	EZCCIP,
-	originFromPath,
+	originFromQuery,
 	parseCCIPReadBody,
 	parseCCIPReadPath,
 	parseCCIPReadRequest,
@@ -78,11 +78,15 @@ describe("parsing", () => {
 		const put = parseCCIPReadRequest(new Request("http://localhost/", { method: "PUT" }));
 		expect(put).rejects.toMatchObject({ status: 405 });
 	});
-	test("originFromPath", () => {
-		expect(originFromPath(`/${ORIGIN}`)).toBe(ORIGIN);
-		expect(originFromPath(`/a/${ORIGIN.toUpperCase().replace("0X", "0x")}/b`)).toBe(ORIGIN);
-		expect(originFromPath(`/${ORIGIN}00`)).toBeUndefined();
-		expect(originFromPath("/")).toBeUndefined();
+	test("originFromQuery", () => {
+		const parse = (query: string) => originFromQuery(new URL(`http://localhost/a${query}`));
+		expect(parse("")).toEqual({ origin: undefined, chainId: undefined });
+		expect(parse(`?origin=${ORIGIN}`)).toEqual({ origin: ORIGIN, chainId: undefined });
+		expect(parse(`?chainId=10&origin=${ORIGIN}`)).toEqual({ origin: ORIGIN, chainId: 10 });
+		expect(parse("?chainId=1")).toEqual({ origin: undefined, chainId: 1 });
+		for (const chainId of ["", "0x1", "-1", "1.5", "1e3", "abc"]) {
+			expect(() => parse(`?chainId=${chainId}`)).toThrow("invalid chainId");
+		}
 	});
 });
 
@@ -91,20 +95,35 @@ describe("createFetchHandler", () => {
 
 	describe("origin", () => {
 		test("defaults to sender", async () => expect(await originOf(await post(fetch))).toBe(SENDER));
-		for (const path of [`/${ORIGIN}`, `/${ORIGIN}/`, `/a/${ORIGIN}/b`, `/a/${ORIGIN}?x=1`]) {
+		for (const path of [`/?origin=${ORIGIN}`, `/a/b?x=1&origin=${ORIGIN}`, `/?chainId=1&origin=${ORIGIN}`]) {
 			test(path, async () => expect(await originOf(await post(fetch, path))).toBe(ORIGIN));
 		}
-		test("parseOrigin replaces the path", async () => {
-			const fetch = createFetchHandler(make(), {
-				parseOrigin: (url) => (url.searchParams.get("o") as Hex | null) ?? undefined,
-			});
-			expect(await originOf(await post(fetch, `/?o=${ORIGIN}`))).toBe(ORIGIN);
+		test("a path component is not the origin", async () => {
 			expect(await originOf(await post(fetch, `/${ORIGIN}`))).toBe(SENDER);
+		});
+		test("chainId", async () => {
+			const ezccip = new EZCCIP();
+			const f = ezccip.addFunctionHandler("function f() returns (uint256)", (_, ctx) => [BigInt(ctx.chainId ?? 999)]);
+			const fetch = createFetchHandler(ezccip);
+			const chainOf = async (path: string) => {
+				const res = await post(fetch, path, { sender: SENDER, data: f.selector });
+				return decodeFunctionResult({ abi: [f.abiFunction], data: ((await res.json()) as { data: Hex }).data });
+			};
+			expect(await chainOf("/?chainId=10")).toBe(10n);
+			expect(await chainOf("/")).toBe(999n);
+			expect((await post(fetch, "/?chainId=x")).status).toBe(400);
+			expect((await post(fetch, "/?origin=0x1234")).status).toBe(400);
+		});
+		test("parseOrigin replaces the query", async () => {
+			const fetch = createFetchHandler(make(), {
+				parseOrigin: (url) => ({ origin: url.pathname.slice(1) as Hex }),
+			});
+			expect(await originOf(await post(fetch, `/${ORIGIN}`))).toBe(ORIGIN);
 		});
 		test("GET", async () => {
 			const get = (path: string) => fetch(new Request(`http://localhost${path}`));
 			expect(await originOf(await get(`/${SENDER}/${GET_ORIGIN}.json`))).toBe(SENDER);
-			expect(await originOf(await get(`/${ORIGIN}/${SENDER}/${GET_ORIGIN}`))).toBe(ORIGIN);
+			expect(await originOf(await get(`/${SENDER}/${GET_ORIGIN}.json?origin=${ORIGIN}`))).toBe(ORIGIN);
 		});
 	});
 
@@ -194,8 +213,8 @@ describe("Bun.serve + viem ccipRequest", () => {
 	});
 
 	for (const [method, template] of [
-		["POST", ORIGIN],
-		["GET", `${ORIGIN}/{sender}/{data}.json`],
+		["POST", `?origin=${ORIGIN}`],
+		["GET", `{sender}/{data}.json?origin=${ORIGIN}`],
 	]) {
 		test(method!, async () => {
 			const res = await ccipRequest({ sender: SENDER, data, urls: [`${server.url}${template}`] });

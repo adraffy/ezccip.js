@@ -4,7 +4,7 @@ import {
 	CORS_HEADERS,
 	describeError,
 	type HTTPOptions,
-	originFromPath,
+	originFromQuery,
 	PREFLIGHT_HEADERS,
 	parseCCIPReadRequest,
 } from "./http.js";
@@ -24,7 +24,7 @@ import {
  */
 export function createFetchHandler(
 	ezccip: EZCCIP,
-	{ cors = true, log = false, parseOrigin = (url) => originFromPath(url.pathname) }: HTTPOptions = {},
+	{ cors = true, log = false, parseOrigin = originFromQuery }: HTTPOptions = {},
 ): (request: Request, extra?: object) => Promise<Response> {
 	const headers = cors ? CORS_HEADERS : undefined;
 	return async (request, extra) => {
@@ -35,7 +35,7 @@ export function createFetchHandler(
 		try {
 			const { sender, data: calldata } = await parseCCIPReadRequest(request);
 			const { data, history } = await ezccip.handleRequest(sender, calldata, {
-				origin: parseOrigin(url),
+				...parseOrigin(url),
 				extra: { ...extra },
 			});
 			if (log) console.log(new Date(), url.pathname, String(history));
