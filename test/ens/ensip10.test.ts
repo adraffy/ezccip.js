@@ -132,7 +132,7 @@ describe("profiles", () => {
 		data: (key) => (key === "test" ? Uint8Array.of(1, 2, 3) : undefined),
 		contenthash: () => "0xe301",
 		name: () => "raffy.eth",
-		pubkey: () => ({ x: 1, y: 2n }),
+		pubkey: () => ({ x: "0x01", y: 2n }),
 		ABI: (contentTypes) => (contentTypes & 1n ? { type: 1n, data: "0x7b7d" } : undefined),
 	};
 	test("text", async () => expect(await query(record, text, [NODE, "name"])).toBe("Raffy"));
@@ -145,6 +145,10 @@ describe("profiles", () => {
 	test("contenthash", async () => expect(await query(record, contenthash, [NODE])).toBe("0xe301"));
 	test("name", async () => expect(await query(record, name, [NODE])).toBe("raffy.eth"));
 	test("pubkey", async () => expect(await query(record, pubkey, [NODE])).toEqual([1n, 2n]));
+	test("pubkey coordinate over 32 bytes throws", async () => {
+		const x = pad("0x01", { size: 33 });
+		expect(query({ pubkey: () => ({ x, y: 0n }) }, pubkey, [NODE])).rejects.toThrow();
+	});
 	test("pubkey (encoded)", async () => {
 		const encoded = pad("0x", { size: 64 });
 		const calldata = encodeFunctionData({ abi: [pubkey], args: [NODE] });

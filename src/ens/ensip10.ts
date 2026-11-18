@@ -4,6 +4,7 @@ import {
 	encodeAbiParameters,
 	encodeErrorResult,
 	type Hex,
+	hexToBigInt,
 	pad,
 	size,
 	toFunctionSelector,
@@ -53,7 +54,7 @@ export interface ENSRecord {
 	/** [ENSIP-3](https://docs.ens.domains/ensip/3) */
 	name?(): Maybe<string>;
 	/** [EIP-619](https://github.com/ethereum/EIPs/pull/619): `{x, y}` or already ABI-encoded */
-	pubkey?(): Maybe<{ x: bigint | number; y: bigint | number } | BytesLike>;
+	pubkey?(): Maybe<{ x: bigint | Hex; y: bigint | Hex } | BytesLike>;
 	/** [ENSIP-4](https://docs.ens.domains/ensip/4): `{type, data}` or already ABI-encoded */
 	ABI?(contentTypes: bigint): Maybe<{ type: bigint | number; data: BytesLike } | BytesLike>;
 }
@@ -173,7 +174,7 @@ const PROFILES = new Map<Hex, Profile>([
 	profile(PUBKEY, async (record) => {
 		const value = await record.pubkey?.();
 		if (isBytesLike(value)) return value;
-		return value ? [BigInt(value.x), BigInt(value.y)] : [0n, 0n];
+		return value ? [toCoordinate(value.x), toCoordinate(value.y)] : [0n, 0n];
 	}),
 	profile(ABI, async (record, [, contentTypes], _, history) => {
 		if (history) history.show = [formatContentTypes(contentTypes)];
@@ -194,6 +195,11 @@ function toEVMAddress(value: BytesLike): Hex {
 	const n = size(hex);
 	if (n !== 20) throw new Error(`invalid EVM address: expected 20 bytes, got ${n}`);
 	return hex;
+}
+
+/** A pubkey coordinate: a bigint, or hex of at most 32 bytes. */
+function toCoordinate(value: bigint | Hex): bigint {
+	return typeof value === "bigint" ? value : hexToBigInt(value, { size: 32 });
 }
 
 function formatContentTypes(contentTypes: bigint) {
