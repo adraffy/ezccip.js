@@ -20,7 +20,7 @@ export type SignedProtocol = "ens" | "tor";
  * Response signing protocol.
  * - `"raw"` &mdash; unsigned (EVM Gateway, testing, etc.)
  * - `"ens"` &mdash; [ensdomains/offchain-resolver](https://github.com/ensdomains/offchain-resolver/)
- * - `"tor"` &mdash; [namestonehq/TheOffchainResolver.sol](https://github.com/namestonehq/TheOffchainResolver.sol)
+ * - `"tor"` &mdash; TheOffchainResolver (TOR)
  */
 export type Protocol = "raw" | SignedProtocol;
 
@@ -69,7 +69,6 @@ const RESPONSE_PARAMETERS = parseAbiParameters("bytes, uint64, bytes");
  * - `"ens"`: `keccak256(0x1900 . origin . expires . keccak256(calldata) . keccak256(result))`
  *   ([SignatureVerifier.sol](https://github.com/ensdomains/offchain-resolver/blob/main/packages/contracts/contracts/SignatureVerifier.sol))
  * - `"tor"`: `keccak256(origin . expires . keccak256(calldata) . keccak256(result))`
- *   ([TOR protocol](https://github.com/namestonehq/TheOffchainResolver.sol#tor-protocol))
  */
 export function getResponseHash({ protocol, origin, expires, calldata, result }: ResponseHashParameters): Hex {
 	const values = [origin, expires, keccak256(calldata), keccak256(result)] as const;

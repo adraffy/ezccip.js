@@ -9,15 +9,15 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 - runtime-agnostic core: `handleRequest(sender, calldata)`, plus HTTP adapters for `fetch` runtimes (Bun, Deno, Cloudflare Workers, Hono) and `node:http`
 - signing protocols:
   - `"ens"` &mdash; [ensdomains/**offchain-resolver**](https://github.com/ensdomains/offchain-resolver/) and [ccip.tools](https://ccip.tools/)
-  - `"tor"` &mdash; [namestonehq/**TheOffchainResolver.sol**](https://github.com/namestonehq/TheOffchainResolver.sol)
+  - `"tor"` &mdash; TheOffchainResolver (TOR)
   - `"raw"` &mdash; unsigned response (EVM Gateway, testing, etc.)
-- `enableENSIP10()` wildcard resolver with drop-in [namestonehq/**enson.js**](https://github.com/namestonehq/enson.js) **Record**-type support
+- `enableENSIP10()` wildcard resolver from plain record objects
 - supports _Multicall-over-CCIP-Read_ (see [Multicall](#multicall))
 - `serveEZCCIP()` to quickly launch a server (Node, Bun, Deno), `createFetchHandler()` for everything else
 
 ## Demo
 
-`bun run start` starts a [**TOR**](https://github.com/namestonehq/TheOffchainResolver.sol#context-format) CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
+`bun run start` starts a **TOR** CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
 
 ## Usage
 

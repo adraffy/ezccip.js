@@ -38,10 +38,7 @@ export type EZCCIPServer = {
 	readonly port: number;
 	/** eg. `http://localhost:8016` */
 	readonly endpoint: string;
-	/**
-	 * [TOR context](https://github.com/namestonehq/TheOffchainResolver.sol#context-format):
-	 * `"{signer} {endpoint}"`, or just the endpoint without a signer.
-	 */
+	/** TOR context: `"{signer} {endpoint}"`, or just the endpoint without a signer. */
 	readonly context: string;
 	/** Stops the server and closes open connections. Safe to call more than once. */
 	shutdown(): Promise<void>;
