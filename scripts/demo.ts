@@ -41,7 +41,7 @@ ezccip.enableENSIP10({
 					case "avatar":
 						return "https://raffy.xyz/ens.jpg";
 					case "url":
-						return "https://github.com/namestonehq/ezccip.js";
+						return "https://github.com/adraffy/ezccip.js";
 					case "location":
 						return `Protocol(${ctx.protocol}) Sender(${ctx.sender})`;
 				}
