@@ -16,9 +16,9 @@ function post(url: string, data: Hex) {
 
 function make() {
 	const ezccip = new EZCCIP();
-	ezccip.addHandler(f, ([x]) => [x + 1n]);
-	ezccip.addHandler(getOrigin, (_, ctx) => [ctx.origin]);
-	ezccip.addHandler(fail, () => {
+	ezccip.addFunctionHandler(f, ([x]) => [x + 1n]);
+	ezccip.addFunctionHandler(getOrigin, (_, ctx) => [ctx.origin]);
+	ezccip.addFunctionHandler(fail, () => {
 		throw new Error("chonk");
 	});
 	return ezccip;
@@ -79,7 +79,9 @@ describe("serveEZCCIP", () => {
 
 	test("extra: ip and custom values", async () => {
 		const ezccip = new EZCCIP();
-		const who = ezccip.addHandler("function who() returns (string)", (_, ctx) => [`${ctx.extra.ip} ${ctx.extra.name}`]);
+		const who = ezccip.addFunctionHandler("function who() returns (string)", (_, ctx) => [
+			`${ctx.extra.ip} ${ctx.extra.name}`,
+		]);
 		await using ccip = await serveEZCCIP(ezccip, { log: false, extra: { name: "chonk" } });
 		const res = await post(ccip.endpoint, who.selector);
 		const { data } = (await res.json()) as { data: Hex };
@@ -162,7 +164,7 @@ describe("serveEZCCIP", () => {
 
 	test("verify over http", async () => {
 		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
-		ezccip.addHandler(f, ([x]) => [x]);
+		ezccip.addFunctionHandler(f, ([x]) => [x]);
 		await using ccip = await serveEZCCIP(ezccip, { log: false });
 		const request = encodeFunctionData({ abi: [f], args: [7n] });
 		const { data: response } = (await (await post(ccip.endpoint, request)).json()) as { data: Hex };

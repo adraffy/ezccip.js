@@ -66,7 +66,7 @@ export type EZCCIPServer = {
  * await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
  *
  * // handlers see the client's IP as ctx.extra.ip
- * ezccip.addHandler("function ip() returns (string)", (_, ctx) => [String(ctx.extra.ip)]);
+ * ezccip.addFunctionHandler("function ip() returns (string)", (_, ctx) => [String(ctx.extra.ip)]);
  * ```
  */
 export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;

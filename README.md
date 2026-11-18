@@ -34,10 +34,10 @@ const ezccip = new EZCCIP({
 
 // implement an arbitrary function
 // args and return type are inferred from the signature
-ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+ezccip.addFunctionHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
 
 // or from an existing ABI
-ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
+ezccip.addFunctionHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
 	history.show = [ctx.sender]; // replace arguments of f(...) in logger
 	history.name = "Chonk"; // rename f() to Chonk() in logger
 	ctx.protocol = "raw"; // override signing protocol for this request
@@ -45,8 +45,9 @@ ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
 });
 
 // or by name from an ABI: human-readable (which can declare structs) or JSON
+// (the name must not be overloaded; for overloads, pass getAbiItem({ abi, name, args }) above)
 const abi = ["struct Point { uint256 x; uint256 y; }", "function flip(Point p) returns (Point)"] as const;
-ezccip.addHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
+ezccip.addAbiHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
 
 // implement a wildcard ENSIP-10 resolver
 // which handles resolve() automatically
@@ -157,7 +158,7 @@ Bun.serve({ port: 8000, fetch: (req, server) => handler(req, { ip: server.reques
 `ctx.extra` is a `Record<string, unknown>` of custom values for handlers (and `resolve`), filled by whoever calls `handleRequest()`. Handlers may read or add to it.
 
 ```ts
-ezccip.addHandler("function whoami() returns (string)", (_, ctx) => [`${ctx.extra.ip}`]);
+ezccip.addFunctionHandler("function whoami() returns (string)", (_, ctx) => [`${ctx.extra.ip}`]);
 
 // serveEZCCIP(): the client's ip (x-forwarded-for, or the socket address), plus your own values
 await serveEZCCIP(ezccip, { extra: { region: "us" } }); // ctx.extra = { region: "us", ip: "::1" }
@@ -222,7 +223,7 @@ bun run smoke  # build, then run dist/ on Node
 - default protocol is `"ens"` when constructed with a signer (was `"tor"`), otherwise `"raw"`; change it later with `ezccip.protocol = ...` and the signer with `ezccip.signer = ...` (or `undefined`)
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
 - `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
-- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, history) => ...)`; signatures must be valid human-readable ABI, starting with `function `
+- `register(abi, impl)` &rarr; one function per call: `addFunctionHandler(signature | AbiFunction, (args, ctx, history) => ...)` or `addAbiHandler(abi, functionName, ...)`; signatures must be valid human-readable ABI, starting with `function `
 - extra context keys (eg. `context.ip`) &rarr; `ctx.extra.ip`
 - `ttlSec` &rarr; `ttl`, `signingKey` &rarr; `signer`, and `context.history` &rarr; the handler's third argument
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`

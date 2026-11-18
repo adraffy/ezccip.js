@@ -29,7 +29,7 @@ export type HandlerFunction<abiFunction extends AbiFunction = AbiFunction> = (
 	history: History,
 ) => Awaitable<HandlerResult<abiFunction>>;
 
-/** A function added with `addHandler()`. */
+/** A function added with `addFunctionHandler()` or `addAbiHandler()`. */
 export type Handler<abiFunction extends AbiFunction = AbiFunction> = {
 	readonly abiFunction: abiFunction;
 	readonly selector: Hex;

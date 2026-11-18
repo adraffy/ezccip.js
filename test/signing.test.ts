@@ -22,7 +22,7 @@ const decode = (data: `0x${string}`) => decodeFunctionResult({ abi: [fn], data }
 
 function make(options?: EZCCIPOptions) {
 	const ezccip = new EZCCIP(options);
-	ezccip.addHandler(fn, ([s]) => [s.toUpperCase()]);
+	ezccip.addFunctionHandler(fn, ([s]) => [s.toUpperCase()]);
 	return ezccip;
 }
 
@@ -43,7 +43,7 @@ test("default protocol", () => {
 
 test("set signer and protocol after construction", async () => {
 	const ezccip = new EZCCIP();
-	ezccip.addHandler(fn, ([s]) => [s]);
+	ezccip.addFunctionHandler(fn, ([s]) => [s]);
 	ezccip.signer = privateKey;
 	expect(ezccip.signer?.address).toBe(address);
 	expect(ezccip.signerAddress).toBe(address);
@@ -109,7 +109,7 @@ for (const protocol of ["ens", "tor"] as const satisfies SignedProtocol[]) {
 
 test("handler changes protocol", async () => {
 	const ezccip = new EZCCIP({ signer: privateKey, protocol: "raw" });
-	ezccip.addHandler(fn, ([s], ctx) => {
+	ezccip.addFunctionHandler(fn, ([s], ctx) => {
 		ctx.protocol = "tor";
 		ctx.ttl = 1000;
 		ctx.origin = origin;
@@ -133,7 +133,7 @@ test("hash layout", () => {
 test("handler changes signer", async () => {
 	const other = generatePrivateKey();
 	const ezccip = new EZCCIP({ signer: privateKey });
-	ezccip.addHandler(fn, ([s], ctx) => {
+	ezccip.addFunctionHandler(fn, ([s], ctx) => {
 		ctx.signer = other; // private key or LocalAccount
 		return [s];
 	});

@@ -31,11 +31,11 @@ const GET_ORIGIN = toFunctionSelector(getOrigin);
 
 function make() {
 	const ezccip = new EZCCIP();
-	ezccip.addHandler(getOrigin, (_, ctx) => [ctx.origin]);
-	ezccip.addHandler(fail, () => {
+	ezccip.addFunctionHandler(getOrigin, (_, ctx) => [ctx.origin]);
+	ezccip.addFunctionHandler(fail, () => {
 		throw new Error("secret");
 	});
-	ezccip.addHandler(failPublic, () => {
+	ezccip.addFunctionHandler(failPublic, () => {
 		throw new CCIPReadError("chonk", { status: 418 });
 	});
 	return ezccip;
@@ -160,7 +160,7 @@ describe("createFetchHandler", () => {
 
 	test("extra", async () => {
 		const ezccip = new EZCCIP();
-		const f = ezccip.addHandler("function f() returns (string)", (_, ctx) => [String(ctx.extra.NAME)]);
+		const f = ezccip.addFunctionHandler("function f() returns (string)", (_, ctx) => [String(ctx.extra.NAME)]);
 		const fetch = createFetchHandler(ezccip);
 		const request = () =>
 			new Request("http://localhost/", { method: "POST", body: JSON.stringify({ sender: SENDER, data: f.selector }) });

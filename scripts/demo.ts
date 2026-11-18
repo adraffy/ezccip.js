@@ -11,7 +11,7 @@ const ezccip = new EZCCIP({
 	protocol: "tor",
 });
 
-ezccip.addHandler("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
+ezccip.addFunctionHandler("function example(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a * 1000n + b]);
 
 ezccip.enableENSIP10({
 	resolve(name, ctx) {

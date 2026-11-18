@@ -8,7 +8,7 @@ import { serveEZCCIP } from "../dist/serve.js";
 const sender = "0x0000000000000000000000000000000000000001";
 const fn = parseAbiItem("function plus(uint256 a, uint256 b) returns (uint256)");
 const ezccip = new EZCCIP({ signer: generatePrivateKey(), protocol: "tor" });
-ezccip.addHandler(fn, ([a, b]) => [a + b]);
+ezccip.addFunctionHandler(fn, ([a, b]) => [a + b]);
 
 const ccip = await serveEZCCIP(ezccip, { log: false });
 try {

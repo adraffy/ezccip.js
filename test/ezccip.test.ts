@@ -44,10 +44,10 @@ async function call(ezccip: EZCCIP, abiFunction: AbiFunction, args: readonly unk
 	return decodeAbiParameters(abiFunction.outputs, data) as readonly unknown[];
 }
 
-describe("addHandler", () => {
+describe("addFunctionHandler / addAbiHandler", () => {
 	test("signature", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler(
+		const handler = ezccip.addFunctionHandler(
 			"function plus(uint256 a, uint256 b) returns (uint256 c)",
 			(args, ctx, history) => {
 				expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
@@ -67,18 +67,18 @@ describe("addHandler", () => {
 	test("requires a valid function signature", () => {
 		const ezccip = new EZCCIP();
 		// @ts-expect-error missing "function"
-		expect(() => ezccip.addHandler("f(string x) returns (string)", () => [""])).toThrow();
-		expect(() => ezccip.addHandler("function f(", () => {})).toThrow();
+		expect(() => ezccip.addFunctionHandler("f(string x) returns (string)", () => [""])).toThrow();
+		expect(() => ezccip.addFunctionHandler("function f(", () => {})).toThrow();
 		// @ts-expect-error leading space
-		expect(() => ezccip.addHandler(" function f()", () => {})).toThrow();
+		expect(() => ezccip.addFunctionHandler(" function f()", () => {})).toThrow();
 		// @ts-expect-error not a function
-		expect(() => ezccip.addHandler("event E()", () => {})).toThrow();
+		expect(() => ezccip.addFunctionHandler("event E()", () => {})).toThrow();
 	});
 
 	test("AbiFunction", async () => {
 		const ezccip = new EZCCIP();
 		const fn = parseAbiItem("function f(bytes32 x) returns (string)");
-		ezccip.addHandler(fn, ([x]) => {
+		ezccip.addFunctionHandler(fn, ([x]) => {
 			expectTypeOf(x).toEqualTypeOf<Hex>();
 			return [x];
 		});
@@ -93,16 +93,16 @@ describe("addHandler", () => {
 			"function flip(Point p) returns (Point)",
 			"event Flipped(Point p)",
 		] as const;
-		const handler = ezccip.addHandler(abi, "flip", ([p]) => {
+		const handler = ezccip.addAbiHandler(abi, "flip", ([p]) => {
 			expectTypeOf(p).toEqualTypeOf<{ x: bigint; y: bigint }>();
 			return [{ x: p.y, y: p.x }];
 		});
 		expect(handler.signature).toBe("flip((uint256,uint256))");
 		expect(await call(ezccip, handler.abiFunction, [{ x: 1n, y: 2n }])).toEqual([{ x: 2n, y: 1n }]);
 		// @ts-expect-error not a function
-		expect(() => ezccip.addHandler(abi, "Flipped", () => {})).toThrow("unknown function: Flipped");
+		expect(() => ezccip.addAbiHandler(abi, "Flipped", () => {})).toThrow("unknown function: Flipped");
 		// @ts-expect-error unknown name
-		expect(() => ezccip.addHandler(abi, "nope", () => {})).toThrow("unknown function: nope");
+		expect(() => ezccip.addAbiHandler(abi, "nope", () => {})).toThrow("unknown function: nope");
 	});
 
 	test("(abi, functionName): Abi", async () => {
@@ -116,20 +116,20 @@ describe("addHandler", () => {
 				outputs: [{ name: "", type: "string" }],
 			},
 		] as const;
-		const handler = ezccip.addHandler(abi, "f", ([x]) => {
+		const handler = ezccip.addAbiHandler(abi, "f", ([x]) => {
 			expectTypeOf(x).toEqualTypeOf<bigint>();
 			return [`${x}`];
 		});
 		expect(await call(ezccip, handler.abiFunction, [7n])).toEqual(["7"]);
-		expect(ezccip.addHandler(parseAbi(["function g()"]), "g", () => {}).signature).toBe("g()");
+		expect(ezccip.addAbiHandler(parseAbi(["function g()"]), "g", () => {}).signature).toBe("g()");
 	});
 
 	test("(abi, functionName): overloaded name throws", () => {
 		const ezccip = new EZCCIP();
 		const abi = ["function f(uint256) returns (uint256)", "function f(string) returns (string)"] as const;
-		expect(() => ezccip.addHandler(abi, "f", () => [0n] as never)).toThrow("overloaded function: f");
+		expect(() => ezccip.addAbiHandler(abi, "f", () => [0n] as never)).toThrow("overloaded function: f");
 		// pick one with getAbiItem() instead
-		const handler = ezccip.addHandler(getAbiItem({ abi: parseAbi(abi), name: "f", args: ["a"] }), ([s]) => [s]);
+		const handler = ezccip.addFunctionHandler(getAbiItem({ abi: parseAbi(abi), name: "f", args: ["a"] }), ([s]) => [s]);
 		expect(handler.signature).toBe("f(string)");
 	});
 
@@ -141,9 +141,9 @@ describe("addHandler", () => {
 			"function g((uint256 a, bool b)[] s) returns (bool)",
 		]);
 		const [fUint, fString, g] = abi;
-		ezccip.addHandler(fUint, ([x]) => [x * 2n]);
-		ezccip.addHandler(fString, ([s]) => [`${s}!`]);
-		ezccip.addHandler(getAbiItem({ abi, name: "g" }), ([s]) => {
+		ezccip.addFunctionHandler(fUint, ([x]) => [x * 2n]);
+		ezccip.addFunctionHandler(fString, ([s]) => [`${s}!`]);
+		ezccip.addFunctionHandler(getAbiItem({ abi, name: "g" }), ([s]) => {
 			expectTypeOf(s).toEqualTypeOf<readonly { a: bigint; b: boolean }[]>();
 			return [s.some((x) => x.b)];
 		});
@@ -155,31 +155,31 @@ describe("addHandler", () => {
 	test("typed result", () => {
 		const ezccip = new EZCCIP();
 		// @ts-expect-error returning nothing requires no outputs
-		ezccip.addHandler("function f() returns (uint256)", () => {});
+		ezccip.addFunctionHandler("function f() returns (uint256)", () => {});
 		// @ts-expect-error wrong output type
-		ezccip.addHandler("function f() returns (uint256)", () => ["x"]);
+		ezccip.addFunctionHandler("function f() returns (uint256)", () => ["x"]);
 		// @ts-expect-error wrong arity
-		ezccip.addHandler("function f() returns (uint256)", () => [1n, 2n]);
+		ezccip.addFunctionHandler("function f() returns (uint256)", () => [1n, 2n]);
 	});
 
 	test("replace", async () => {
 		const ezccip = new EZCCIP();
 		const fn = parseAbiItem("function f() returns (uint256)");
-		ezccip.addHandler(fn, () => [1n]);
-		ezccip.addHandler(fn, () => [2n]);
+		ezccip.addFunctionHandler(fn, () => [1n]);
+		ezccip.addFunctionHandler(fn, () => [2n]);
 		expect(await call(ezccip, fn)).toEqual([2n]);
 	});
 
 	test("not a function", () => {
 		const ezccip = new EZCCIP();
-		expect(() => ezccip.addHandler(parseAbiItem("event E()") as never, () => {})).toThrow();
+		expect(() => ezccip.addFunctionHandler(parseAbiItem("event E()") as never, () => {})).toThrow();
 	});
 });
 
 test("findHandler", () => {
 	const ezccip = new EZCCIP();
 	const fn = parseAbiItem("function g(uint256 a, uint256 b) view returns (uint256)");
-	ezccip.addHandler(fn, () => [0n]);
+	ezccip.addFunctionHandler(fn, () => [0n]);
 	const selector = toFunctionSelector(fn);
 	expect(ezccip.findHandler("g")?.selector).toBe(selector);
 	expect(ezccip.findHandler("g(uint256,uint256)")?.selector).toBe(selector);
@@ -189,7 +189,7 @@ test("findHandler", () => {
 	// multicall is built in, not a handler
 	expect(ezccip.findHandler("multicall")).toBeUndefined();
 	expect(ezccip.handlers.map((x) => x.signature)).toEqual(["g(uint256,uint256)"]);
-	expect(() => ezccip.addHandler(MULTICALL, () => [[]])).toThrow("multicall is built in");
+	expect(() => ezccip.addFunctionHandler(MULTICALL, () => [[]])).toThrow("multicall is built in");
 });
 
 describe("results", () => {
@@ -203,14 +203,14 @@ describe("results", () => {
 	for (const [label, fn_] of Object.entries(cases)) {
 		test(label, async () => {
 			const ezccip = new EZCCIP();
-			ezccip.addHandler(fn, fn_);
+			ezccip.addFunctionHandler(fn, fn_);
 			expect(await call(ezccip, fn, [1337n])).toEqual([1337n]);
 		});
 	}
 	test("void", async () => {
 		const ezccip = new EZCCIP();
 		const g = parseAbiItem("function g()");
-		ezccip.addHandler(g, () => {});
+		ezccip.addFunctionHandler(g, () => {});
 		const { data } = await ezccip.handleRequest(sender, encode(g));
 		expect(data).toBe("0x");
 	});
@@ -220,7 +220,7 @@ describe("handleRead", () => {
 	test("context", async () => {
 		const ezccip = new EZCCIP({ ttl: 5 });
 		const fn = parseAbiItem("function f() returns (address, address)");
-		ezccip.addHandler(fn, (_, ctx) => {
+		ezccip.addFunctionHandler(fn, (_, ctx) => {
 			expect(ctx.calldata).toBe(encode(fn));
 			expect(ctx.ttl).toBe(5);
 			expect(ctx.protocol).toBe("raw");
@@ -236,7 +236,7 @@ describe("handleRead", () => {
 	test("extra reaches multicall subcalls and resolve()", async () => {
 		const ezccip = new EZCCIP();
 		const text = parseAbiItem("function text(bytes32, string) returns (string)");
-		const f = ezccip.addHandler("function f() returns (string)", (_, ctx) => [`f${ctx.extra.suffix}`]);
+		const f = ezccip.addFunctionHandler("function f() returns (string)", (_, ctx) => [`f${ctx.extra.suffix}`]);
 		ezccip.enableENSIP10({ resolve: (name, ctx) => ({ text: () => `${name}${ctx.extra.suffix}` }) });
 		const resolve = encode(RESOLVE, [bytesToHex(packetToBytes("a.eth")), encode(text, [pad("0x"), "k"])]);
 		const { data } = await ezccip.handleRequest(sender, encode(MULTICALL, [[f.selector, resolve]]), {
@@ -249,7 +249,7 @@ describe("handleRead", () => {
 
 	test("extra", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("function f() returns (string)", (_, ctx) => {
+		const handler = ezccip.addFunctionHandler("function f() returns (string)", (_, ctx) => {
 			ctx.extra.seen = true;
 			return [String(ctx.extra.greeting)];
 		});
@@ -264,7 +264,7 @@ describe("handleRead", () => {
 	test("origin defaults to sender", async () => {
 		const origin = "0x0000000000000000000000000000000000000002";
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("function f() returns (address)", (_, ctx) => [ctx.origin]);
+		const handler = ezccip.addFunctionHandler("function f() returns (address)", (_, ctx) => [ctx.origin]);
 		expect((await ezccip.handleRequest(sender, handler.selector)).context.origin).toBe(sender);
 		expect((await ezccip.handleRequest(sender, handler.selector, { origin })).context.origin).toBe(origin);
 	});
@@ -273,11 +273,11 @@ describe("handleRead", () => {
 		expect(() => new EZCCIP({ ttl: Number.NaN })).toThrow("invalid ttl");
 		expect(() => new EZCCIP({ ttl: -1 })).toThrow("invalid ttl");
 		const ezccip = new EZCCIP();
-		const hex = ezccip.addHandler("function hex() returns (string)", (() => "hello") as never);
-		const origin = ezccip.addHandler("function origin()", (_, ctx) => {
+		const hex = ezccip.addFunctionHandler("function hex() returns (string)", (() => "hello") as never);
+		const origin = ezccip.addFunctionHandler("function origin()", (_, ctx) => {
 			ctx.origin = "0xbad";
 		});
-		const ttl = ezccip.addHandler("function ttl()", (_, ctx) => {
+		const ttl = ezccip.addFunctionHandler("function ttl()", (_, ctx) => {
 			ctx.ttl = -1;
 		});
 		expect(ezccip.handleRequest(sender, hex.selector)).rejects.toThrow("expected hex");
@@ -288,14 +288,14 @@ describe("handleRead", () => {
 
 	test("fractional ttl", async () => {
 		const ezccip = new EZCCIP({ signer: generatePrivateKey(), ttl: 1.5 });
-		const handler = ezccip.addHandler("function f()", () => {});
+		const handler = ezccip.addFunctionHandler("function f()", () => {});
 		expect((await ezccip.handleRequest(sender, handler.selector)).data).toBeDefined();
 	});
 
 	test("handler sets signer and protocol", async () => {
 		const ezccip = new EZCCIP();
 		const signer = generatePrivateKey();
-		const handler = ezccip.addHandler("function f()", (_, ctx) => {
+		const handler = ezccip.addFunctionHandler("function f()", (_, ctx) => {
 			expect(ctx.protocol).toBe("raw");
 			ctx.signer = signer;
 			ctx.protocol = "ens";
@@ -313,7 +313,7 @@ describe("handleRead", () => {
 
 	test("signs the request calldata, not ctx.calldata", async () => {
 		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
-		const handler = ezccip.addHandler("function f()", (_, ctx) => {
+		const handler = ezccip.addFunctionHandler("function f()", (_, ctx) => {
 			(ctx as { calldata: Hex }).calldata = "0x12345678";
 		});
 		const { data } = await ezccip.handleRequest(sender, handler.selector);
@@ -324,7 +324,7 @@ describe("handleRead", () => {
 
 	test("invalid input", async () => {
 		const ezccip = new EZCCIP();
-		const f = ezccip.addHandler("function f(uint256)", () => {});
+		const f = ezccip.addFunctionHandler("function f(uint256)", () => {});
 		expect(ezccip.handleRequest(sender, `${f.selector}1234`)).rejects.toMatchObject({ status: 400 });
 		expect(ezccip.handleRequest(sender, f.selector, { origin: "0x1234" })).rejects.toMatchObject({ status: 400 });
 		expect(ezccip.handleRequest("0x1234", "0x12345678")).rejects.toMatchObject({ status: 400 });
@@ -334,7 +334,7 @@ describe("handleRead", () => {
 
 	test("history", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("function f(string s, uint256 x) returns (uint256)", (_, __, history) => {
+		const handler = ezccip.addFunctionHandler("function f(string s, uint256 x) returns (uint256)", (_, __, history) => {
 			history.show = ["custom"];
 			history.name = "Chonk";
 			return [0n];
@@ -349,8 +349,8 @@ describe("multicall", () => {
 	const fail = parseAbiItem("function fail()");
 	const text = parseAbiItem("function text(bytes32, string) returns (string)");
 	const ezccip = new EZCCIP();
-	ezccip.addHandler(f, ([x]) => [x * 2n]);
-	ezccip.addHandler(fail, () => {
+	ezccip.addFunctionHandler(f, ([x]) => [x * 2n]);
+	ezccip.addFunctionHandler(fail, () => {
 		throw new CCIPReadError("nope");
 	});
 	ezccip.enableENSIP10({ resolve: (name) => ({ text: (key) => `${name}:${key}` }) });
@@ -369,7 +369,7 @@ describe("multicall", () => {
 
 	test("subcalls share context", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.addHandler("function setTTL()", (_, ctx) => {
+		ezccip.addFunctionHandler("function setTTL()", (_, ctx) => {
 			ctx.ttl = 123;
 		});
 		const res = await ezccip.handleRequest(sender, multicall([toFunctionSelector("function setTTL()")]));
@@ -403,7 +403,7 @@ test("unknown protocol", () => {
 		new EZCCIP().protocol = "nope" as never;
 	}).toThrow("unknown protocol");
 	const ezccip = new EZCCIP({ signer: generatePrivateKey() });
-	ezccip.addHandler("function f()", (_, ctx) => {
+	ezccip.addFunctionHandler("function f()", (_, ctx) => {
 		ctx.protocol = "nope" as never;
 	});
 	expect(ezccip.handleRequest("0x0000000000000000000000000000000000000001", "0x26121ff0")).rejects.toThrow(

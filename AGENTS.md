@@ -31,7 +31,7 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 ```
 src/
   index.ts      public API; explicit named exports only (no `export *`)
-  ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
+  ezccip.ts     EZCCIP class: addFunctionHandler/addAbiHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
   context.ts    ReadContext: the request's shared, mutable state (ctx)
   types.ts      shared public types: Handler, HandlerFunction, HandlerResult, BytesLike
   http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS headers, describeError (internal)
@@ -54,7 +54,7 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 ## Conventions
 
 - **Relative imports use `.js` extensions** (`import { x } from "./http.js"`), even though the files are `.ts`. `tsc` does not rewrite `.ts` specifiers inside emitted `.d.ts` files, so `.ts` imports break consumers.
-- **Types come from the ABI.** `addHandler()` takes one function: a human-readable signature that must start with `function ` (parsed as-is by viem's `parseAbiItem`), a viem `AbiFunction`, or `(abi, functionName)` where `abi` is an `Abi` or human-readable signatures (eg. with `struct`s) and the name must not be overloaded, and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
+- **Types come from the ABI.** `addFunctionHandler(fn, handler)` takes a human-readable signature that must start with `function ` (parsed as-is by viem's `parseAbiItem`) or a viem `AbiFunction`. `addAbiHandler(abi, functionName, handler)` takes an `Abi` or human-readable signatures (eg. with `struct`s) and a name that must not be overloaded; it delegates to `addFunctionHandler`. Keep them as separate methods with one signature each, not overloads, and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
 - **Handler signature** is `(args, ctx, history) => result`, like the original. `ctx` is a `ReadContext`: one plain object per request, shared by every call in it (including `multicall` subcalls). `origin`, `protocol`, `signer`, `ttl`, and `extra` are plain mutable fields with no getters/setters; they are validated once, when signing (`#sign`). `history` is the per-call log entry. Sign with the `calldata` local in `handleRequest`, never `ctx.calldata`.
 - **`multicall`** is handled in `#call`, not registered as a handler, so it can't be replaced and isn't listed in `handlers`.
 - **`History`** only exists to build the log line: `name`, `show` (`readonly unknown[] | false`), `error`, `children`, `inner`. Don't add fields that aren't printed.

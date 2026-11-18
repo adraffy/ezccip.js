@@ -56,16 +56,11 @@ type FunctionSignature = `function ${string}`;
 
 type ParseFunction<signature extends FunctionSignature> = Extract<ParseAbiItem<signature>, AbiFunction>;
 
-/** An ABI, or human-readable ABI signatures (which may declare structs). */
-type AbiLike = Abi | readonly string[];
+type ToFunction<fn extends FunctionSignature | AbiFunction> = fn extends FunctionSignature ? ParseFunction<fn> : fn;
 
-type ToAbi<abi extends AbiLike> = abi extends Abi ? abi : abi extends readonly string[] ? ParseAbi<abi> : never;
+type ToAbi<abi extends Abi | readonly string[]> = abi extends readonly string[] ? ParseAbi<abi> : abi;
 
 const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
-
-function isStringArray(abi: AbiLike): abi is readonly string[] {
-	return typeof abi[0] === "string";
-}
 
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
@@ -76,7 +71,7 @@ function isStringArray(abi: AbiLike): abi is readonly string[] {
  * @example
  * ```ts
  * const ezccip = new EZCCIP({ signer: privateKey });
- * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+ * ezccip.addFunctionHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
  * const { data } = await ezccip.handleRequest(sender, calldata);
  * ```
  */
@@ -119,56 +114,49 @@ export class EZCCIP {
 	}
 
 	/**
-	 * Adds a handler for an offchain function. Arguments and outputs are typed from the function.
-	 * Adding the same selector again replaces it.
+	 * Adds a handler for an offchain function, given as a human-readable signature or an `AbiFunction`.
+	 * Arguments and outputs are typed from the function. Adding the same selector again replaces it.
 	 *
 	 * @example
 	 * ```ts
-	 * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
-	 * ezccip.addHandler(getAbiItem({ abi, name: "f" }), ([x], ctx) => [x]);
-	 *
-	 * // from an ABI, eg. with structs: the function name must not be overloaded
-	 * const abi = ["struct Point { uint256 x; uint256 y; }", "function flip(Point p) returns (Point)"] as const;
-	 * ezccip.addHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
+	 * ezccip.addFunctionHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
+	 * ezccip.addFunctionHandler(getAbiItem({ abi, name: "f" }), ([x], ctx) => [x]);
 	 * ```
 	 */
-	addHandler<const signature extends FunctionSignature>(
-		signature: signature,
-		fn: HandlerFunction<ParseFunction<signature>>,
-	): Handler<ParseFunction<signature>>;
-	addHandler<const abiFunction extends AbiFunction>(
-		abiFunction: abiFunction,
-		fn: HandlerFunction<abiFunction>,
-	): Handler<abiFunction>;
-	addHandler<const abi extends AbiLike, functionName extends ExtractAbiFunctionNames<ToAbi<abi>>>(
-		abi: abi,
-		functionName: functionName,
-		fn: HandlerFunction<ExtractAbiFunction<ToAbi<abi>, functionName>>,
-	): Handler<ExtractAbiFunction<ToAbi<abi>, functionName>>;
-	addHandler(
-		...args: [string | AbiFunction, (...args: any[]) => any] | [AbiLike, string, (...args: any[]) => any]
-	): Handler<any> {
-		let abiFunction: AbiFunction | undefined;
-		let fn: (...args: any[]) => any;
-		if (args.length === 3) {
-			const [abiLike, functionName] = args;
-			fn = args[2];
-			const abi: Abi = isStringArray(abiLike) ? parseAbi(abiLike) : abiLike;
-			const matches = abi.filter((x): x is AbiFunction => x.type === "function" && x.name === functionName);
-			if (matches.length > 1) throw new TypeError(`overloaded function: ${functionName}`);
-			abiFunction = matches[0];
-			if (!abiFunction) throw new TypeError(`unknown function: ${functionName}`);
-		} else {
-			const [item] = args;
-			fn = args[1];
-			abiFunction = typeof item === "string" ? (parseAbiItem(item) as AbiFunction) : item;
-		}
+	addFunctionHandler<const fn extends FunctionSignature | AbiFunction>(
+		fn: fn,
+		handler: HandlerFunction<ToFunction<fn>>,
+	): Handler<ToFunction<fn>> {
+		const abiFunction = (typeof fn === "string" ? parseAbiItem(fn as string) : fn) as AbiFunction;
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
 		const selector = toFunctionSelector(abiFunction);
 		if (selector === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
-		const handler = { abiFunction, selector, signature: toFunctionSignature(abiFunction), fn };
-		this.#handlers.set(selector, handler);
-		return handler;
+		const added: Handler<any> = { abiFunction, selector, signature: toFunctionSignature(abiFunction), fn: handler };
+		this.#handlers.set(selector, added);
+		return added;
+	}
+
+	/**
+	 * Adds a handler for a function of an ABI, by name. The ABI is an `Abi` or human-readable signatures,
+	 * which may declare structs. The name must not be overloaded: for overloads, use {@link addFunctionHandler}
+	 * with `getAbiItem({ abi, name, args })`.
+	 *
+	 * @example
+	 * ```ts
+	 * const abi = ["struct Point { uint256 x; uint256 y; }", "function flip(Point p) returns (Point)"] as const;
+	 * ezccip.addAbiHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
+	 * ```
+	 */
+	addAbiHandler<const abi extends Abi | readonly string[], functionName extends ExtractAbiFunctionNames<ToAbi<abi>>>(
+		abi: abi,
+		functionName: functionName,
+		handler: HandlerFunction<ExtractAbiFunction<ToAbi<abi>, functionName>>,
+	): Handler<ExtractAbiFunction<ToAbi<abi>, functionName>> {
+		const items: Abi = typeof abi[0] === "string" ? parseAbi(abi as readonly string[]) : (abi as Abi);
+		const matches = items.filter((x) => x.type === "function" && x.name === functionName);
+		if (matches.length > 1) throw new TypeError(`overloaded function: ${functionName}`);
+		if (!matches[0]) throw new TypeError(`unknown function: ${functionName}`);
+		return this.addFunctionHandler(matches[0] as AbiFunction, handler as never) as never;
 	}
 
 	/** Finds a handler by name, signature, selector, or ABI. */
@@ -190,7 +178,7 @@ export class EZCCIP {
 	 * @returns this instance, for chaining.
 	 */
 	enableENSIP10(parameters: ENSIP10Parameters): this {
-		this.addHandler(RESOLVE, createENSIP10Handler(parameters));
+		this.addFunctionHandler(RESOLVE, createENSIP10Handler(parameters));
 		return this;
 	}
 
