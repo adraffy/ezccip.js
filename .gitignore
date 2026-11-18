@@ -1,4 +1,4 @@
-junk/
 node_modules/
-npm-test/
+dist/
+junk/
 *.tgz

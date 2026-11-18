@@ -1,0 +1,14 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"types": ["node"],
+		"lib": ["ES2023", "DOM"],
+		"noEmit": false,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"rootDir": "src",
+		"outDir": "dist"
+	},
+	"include": ["src"]
+}
