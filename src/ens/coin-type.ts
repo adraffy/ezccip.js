@@ -14,8 +14,8 @@ export function chainFromCoinType(coinType: bigint): number | undefined {
 	return chain >= 0n && chain < COIN_TYPE_DEFAULT ? Number(chain) : undefined;
 }
 
-/** Short description of a coin type for logging, eg. `evm:10`. */
+/** Short description of a coin type for logging: `evm:{chain}` for EVM coin types (eg. `evm:1` for `60`), otherwise the number. */
 export function formatCoinType(coinType: bigint): string {
-	const chain = coinType ^ COIN_TYPE_DEFAULT;
-	return chain < COIN_TYPE_DEFAULT ? `evm:${chain}` : String(coinType);
+	const chain = chainFromCoinType(coinType);
+	return chain === undefined ? String(coinType) : `evm:${chain}`;
 }

@@ -12,5 +12,8 @@ test("chainFromCoinType", () => {
 
 test("formatCoinType", () => {
 	expect(formatCoinType(COIN_TYPE_DEFAULT | 10n)).toBe("evm:10");
-	expect(formatCoinType(60n)).toBe("60");
+	expect(formatCoinType(COIN_TYPE_DEFAULT)).toBe("evm:0");
+	expect(formatCoinType(60n)).toBe("evm:1");
+	expect(formatCoinType(0n)).toBe("0"); // bitcoin
+	expect(formatCoinType(1n << 40n)).toBe(String(1n << 40n));
 });
