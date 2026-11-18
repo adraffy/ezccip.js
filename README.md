@@ -44,6 +44,10 @@ ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
 	return "0x..."; // return already-encoded bytes
 });
 
+// or by name from an ABI: human-readable (which can declare structs) or JSON
+const abi = ["struct Point { uint256 x; uint256 y; }", "function flip(Point p) returns (Point)"] as const;
+ezccip.addHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
+
 // implement a wildcard ENSIP-10 resolver
 // which handles resolve() automatically
 ezccip.enableENSIP10({

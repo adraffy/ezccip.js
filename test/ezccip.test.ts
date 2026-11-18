@@ -86,6 +86,53 @@ describe("addHandler", () => {
 		expect(await call(ezccip, fn, [x])).toEqual([x]);
 	});
 
+	test("(abi, functionName): human-readable with structs", async () => {
+		const ezccip = new EZCCIP();
+		const abi = [
+			"struct Point { uint256 x; uint256 y; }",
+			"function flip(Point p) returns (Point)",
+			"event Flipped(Point p)",
+		] as const;
+		const handler = ezccip.addHandler(abi, "flip", ([p]) => {
+			expectTypeOf(p).toEqualTypeOf<{ x: bigint; y: bigint }>();
+			return [{ x: p.y, y: p.x }];
+		});
+		expect(handler.signature).toBe("flip((uint256,uint256))");
+		expect(await call(ezccip, handler.abiFunction, [{ x: 1n, y: 2n }])).toEqual([{ x: 2n, y: 1n }]);
+		// @ts-expect-error not a function
+		expect(() => ezccip.addHandler(abi, "Flipped", () => {})).toThrow("unknown function: Flipped");
+		// @ts-expect-error unknown name
+		expect(() => ezccip.addHandler(abi, "nope", () => {})).toThrow("unknown function: nope");
+	});
+
+	test("(abi, functionName): Abi", async () => {
+		const ezccip = new EZCCIP();
+		const abi = [
+			{
+				type: "function",
+				name: "f",
+				stateMutability: "view",
+				inputs: [{ name: "x", type: "uint256" }],
+				outputs: [{ name: "", type: "string" }],
+			},
+		] as const;
+		const handler = ezccip.addHandler(abi, "f", ([x]) => {
+			expectTypeOf(x).toEqualTypeOf<bigint>();
+			return [`${x}`];
+		});
+		expect(await call(ezccip, handler.abiFunction, [7n])).toEqual(["7"]);
+		expect(ezccip.addHandler(parseAbi(["function g()"]), "g", () => {}).signature).toBe("g()");
+	});
+
+	test("(abi, functionName): overloaded name throws", () => {
+		const ezccip = new EZCCIP();
+		const abi = ["function f(uint256) returns (uint256)", "function f(string) returns (string)"] as const;
+		expect(() => ezccip.addHandler(abi, "f", () => [0n] as never)).toThrow("overloaded function: f");
+		// pick one with getAbiItem() instead
+		const handler = ezccip.addHandler(getAbiItem({ abi: parseAbi(abi), name: "f", args: ["a"] }), ([s]) => [s]);
+		expect(handler.signature).toBe("f(string)");
+	});
+
 	test("from an ABI", async () => {
 		const ezccip = new EZCCIP();
 		const abi = parseAbi([

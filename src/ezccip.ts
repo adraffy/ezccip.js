@@ -1,4 +1,6 @@
+import type { ExtractAbiFunction, ExtractAbiFunctionNames } from "abitype";
 import {
+	type Abi,
 	type AbiFunction,
 	type Address,
 	encodeAbiParameters,
@@ -6,7 +8,9 @@ import {
 	type Hex,
 	isAddress,
 	isHex,
+	type ParseAbi,
 	type ParseAbiItem,
+	parseAbi,
 	parseAbiItem,
 	toFunctionSelector,
 	toFunctionSignature,
@@ -52,7 +56,16 @@ type FunctionSignature = `function ${string}`;
 
 type ParseFunction<signature extends FunctionSignature> = Extract<ParseAbiItem<signature>, AbiFunction>;
 
+/** An ABI, or human-readable ABI signatures (which may declare structs). */
+type AbiLike = Abi | readonly string[];
+
+type ToAbi<abi extends AbiLike> = abi extends Abi ? abi : abi extends readonly string[] ? ParseAbi<abi> : never;
+
 const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
+
+function isStringArray(abi: AbiLike): abi is readonly string[] {
+	return typeof abi[0] === "string";
+}
 
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
@@ -113,6 +126,10 @@ export class EZCCIP {
 	 * ```ts
 	 * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
 	 * ezccip.addHandler(getAbiItem({ abi, name: "f" }), ([x], ctx) => [x]);
+	 *
+	 * // from an ABI, eg. with structs: the function name must not be overloaded
+	 * const abi = ["struct Point { uint256 x; uint256 y; }", "function flip(Point p) returns (Point)"] as const;
+	 * ezccip.addHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
 	 * ```
 	 */
 	addHandler<const signature extends FunctionSignature>(
@@ -123,8 +140,29 @@ export class EZCCIP {
 		abiFunction: abiFunction,
 		fn: HandlerFunction<abiFunction>,
 	): Handler<abiFunction>;
-	addHandler(abiFunction: string | AbiFunction, fn: (...args: any[]) => any): Handler<any> {
-		if (typeof abiFunction === "string") abiFunction = parseAbiItem(abiFunction) as AbiFunction;
+	addHandler<const abi extends AbiLike, functionName extends ExtractAbiFunctionNames<ToAbi<abi>>>(
+		abi: abi,
+		functionName: functionName,
+		fn: HandlerFunction<ExtractAbiFunction<ToAbi<abi>, functionName>>,
+	): Handler<ExtractAbiFunction<ToAbi<abi>, functionName>>;
+	addHandler(
+		...args: [string | AbiFunction, (...args: any[]) => any] | [AbiLike, string, (...args: any[]) => any]
+	): Handler<any> {
+		let abiFunction: AbiFunction | undefined;
+		let fn: (...args: any[]) => any;
+		if (args.length === 3) {
+			const [abiLike, functionName] = args;
+			fn = args[2];
+			const abi: Abi = isStringArray(abiLike) ? parseAbi(abiLike) : abiLike;
+			const matches = abi.filter((x): x is AbiFunction => x.type === "function" && x.name === functionName);
+			if (matches.length > 1) throw new TypeError(`overloaded function: ${functionName}`);
+			abiFunction = matches[0];
+			if (!abiFunction) throw new TypeError(`unknown function: ${functionName}`);
+		} else {
+			const [item] = args;
+			fn = args[1];
+			abiFunction = typeof item === "string" ? (parseAbiItem(item) as AbiFunction) : item;
+		}
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
 		const selector = toFunctionSelector(abiFunction);
 		if (selector === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
