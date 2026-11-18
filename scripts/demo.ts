@@ -26,7 +26,7 @@ ezccip.enableENSIP10({
 					case 0n:
 						return "0x76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac"; // encoded $btc address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa (Satoshi)
 					case 3n:
-						return "0x76a9149eb02ebe2f323494320f9b1153f07a2e0eff528588ac"; // encoded $doge address
+						return "0x76a9149eb02ebe2f323494320f9b1153f07a2e0eff528588ac"; // encoded $doge address: DKcAMwyEq5rwe2nXUMBqVYZFSNneCg6iSL
 				}
 			},
 			data(key) {
