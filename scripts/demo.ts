@@ -7,7 +7,9 @@ import { serveEZCCIP } from "../src/serve.js";
 
 const ezccip = new EZCCIP({
 	// public demo key from its preimage, like the original serve(): do not use in production
-	signer: keccak256(stringToBytes("ezccip")), // 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9
+	// key:     0x836df63ac213d059562eff5345da93d2049c9d4a07942d3476e42891fa3713c8
+	// address: 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9
+	signer: keccak256(stringToBytes("ezccip")),
 	protocol: "tor",
 });
 
