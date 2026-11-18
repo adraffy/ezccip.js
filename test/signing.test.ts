@@ -41,9 +41,26 @@ test("default protocol", () => {
 	expect(new EZCCIP({ signer: privateKey, protocol: "tor" }).protocol).toBe("tor");
 });
 
+test("set signer and protocol after construction", async () => {
+	const ezccip = new EZCCIP();
+	ezccip.addHandler(fn, ([s]) => [s]);
+	ezccip.signer = privateKey;
+	expect(ezccip.signer?.address).toBe(address);
+	expect(ezccip.signerAddress).toBe(address);
+	expect(ezccip.protocol).toBe("raw"); // unchanged
+	ezccip.protocol = "tor";
+	const { data: response } = await ezccip.handleRequest(sender, request);
+	expect((await verifyResponse({ protocol: "tor", response, calldata: request, origin: sender })).signer).toBe(address);
+	ezccip.signer = undefined;
+	expect(ezccip.signer).toBeUndefined();
+	expect(ezccip.handleRequest(sender, request)).rejects.toThrow("requires a signer");
+	ezccip.protocol = "raw";
+	expect(decode((await ezccip.handleRequest(sender, request)).data)).toBe("chonk");
+});
+
 test("raw", async () => {
 	const { data, context } = await make().handleRequest(sender, request);
-	expect(context.protocol).toBeUndefined(); // "raw" without a signer
+	expect(context.protocol).toBe("raw");
 	expect(decode(data)).toBe("CHONK");
 });
 

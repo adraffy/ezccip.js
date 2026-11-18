@@ -41,7 +41,7 @@ export type Handler<abiFunction extends AbiFunction = AbiFunction> = {
 
 /** How a response is signed. Defaults on `EZCCIP`, per request in `handleRequest()`, or set by handlers on `ctx`. */
 export type ResponseOptions = {
-	/** (default: `"ens"` with a signer, otherwise `"raw"`) */
+	/** (default: `ezccip.protocol`, which is `"ens"` if constructed with a signer, otherwise `"raw"`) */
 	protocol?: Protocol | undefined;
 	/** A private key or eg. a viem `LocalAccount`. */
 	signer?: SignerLike | undefined;

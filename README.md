@@ -62,6 +62,10 @@ ezccip.enableENSIP10({
 	// unreachableAsEmpty: false, // unknown names revert UnreachableName
 });
 
+// signer and protocol can change later (the protocol isn't changed by setting a signer)
+ezccip.signer = otherKey; // or undefined to clear it
+ezccip.protocol = "tor";
+
 // answer a request directly
 const { data, history } = await ezccip.handleRequest(sender, calldata); // { origin, extra, ... } optional
 console.log(history.toString()); // eg. resolve(raffy.eth).text(name)
@@ -78,7 +82,7 @@ await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@namestone/
 - `args` &mdash; decoded arguments
 - `ctx` &mdash; a `ReadContext`: one plain object shared by the whole request (every `multicall` subcall gets the same one)
   - `sender`, `calldata` &mdash; the request
-  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Set them in any call to change the entire response; they're validated when signing. `protocol` is `undefined` unless set, which means `"ens"` with a signer, otherwise `"raw"`, so setting `ctx.signer` alone is enough
+  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Set them in any call to change the entire response; they're validated when signing. They start from the `handleRequest()` options, then the `EZCCIP` defaults. Setting `ctx.signer` doesn't change `ctx.protocol`
   - `extra` &mdash; custom values from the caller, eg. `ctx.extra.ip`, see [Extra](#extra)
 - `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
 - `result` &mdash; tuple of outputs (ABI-encoded for you) or already-encoded `Hex | Uint8Array`. Functions without outputs may return nothing
@@ -211,10 +215,10 @@ bun run smoke  # build, then run dist/ on Node
 ### Migrating from 0.1
 
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
-- default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
+- default protocol is `"ens"` when constructed with a signer (was `"tor"`), otherwise `"raw"`; change it later with `ezccip.protocol = ...` and the signer with `ezccip.signer = ...` (or `undefined`)
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
 - `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
-- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, history) => ...)`
+- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, history) => ...)`; signatures must be valid human-readable ABI, starting with `function `
 - extra context keys (eg. `context.ip`) &rarr; `ctx.extra.ip`
 - `ttlSec` &rarr; `ttl`, `signingKey` &rarr; `signer`, and `context.history` &rarr; the handler's third argument
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`

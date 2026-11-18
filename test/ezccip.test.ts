@@ -64,13 +64,15 @@ describe("addHandler", () => {
 		expect(await call(ezccip, handler.abiFunction, [1n, 2n])).toEqual([3n]);
 	});
 
-	test("without function prefix", async () => {
+	test("requires a valid function signature", () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("f(string x) returns (string)", ([x]) => {
-			expectTypeOf(x).toEqualTypeOf<string>();
-			return [x.toUpperCase()];
-		});
-		expect(await call(ezccip, handler.abiFunction, ["abc"])).toEqual(["ABC"]);
+		// @ts-expect-error missing "function"
+		expect(() => ezccip.addHandler("f(string x) returns (string)", () => [""])).toThrow();
+		expect(() => ezccip.addHandler("function f(", () => {})).toThrow();
+		// @ts-expect-error leading space
+		expect(() => ezccip.addHandler(" function f()", () => {})).toThrow();
+		// @ts-expect-error not a function
+		expect(() => ezccip.addHandler("event E()", () => {})).toThrow();
 	});
 
 	test("AbiFunction", async () => {
@@ -101,13 +103,6 @@ describe("addHandler", () => {
 		expect(await call(ezccip, fUint, [21n])).toEqual([42n]);
 		expect(await call(ezccip, fString, ["hi"])).toEqual(["hi!"]);
 		expect(await call(ezccip, g, [[{ a: 1n, b: true }]])).toEqual([true]);
-	});
-
-	test("prefix needs a space", async () => {
-		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("functionality() returns (uint256)", () => [1n]);
-		expect(handler.signature).toBe("functionality()");
-		expect(await call(ezccip, handler.abiFunction)).toEqual([1n]);
 	});
 
 	test("typed result", () => {
@@ -181,7 +176,7 @@ describe("handleRead", () => {
 		ezccip.addHandler(fn, (_, ctx) => {
 			expect(ctx.calldata).toBe(encode(fn));
 			expect(ctx.ttl).toBe(5);
-			expect(ctx.protocol).toBeUndefined(); // "raw" without a signer
+			expect(ctx.protocol).toBe("raw");
 			expect(ctx.signer).toBeUndefined();
 			return [ctx.sender, ctx.origin];
 		});
@@ -207,7 +202,7 @@ describe("handleRead", () => {
 
 	test("extra", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("f() returns (string)", (_, ctx) => {
+		const handler = ezccip.addHandler("function f() returns (string)", (_, ctx) => {
 			ctx.extra.seen = true;
 			return [String(ctx.extra.greeting)];
 		});
@@ -250,15 +245,16 @@ describe("handleRead", () => {
 		expect((await ezccip.handleRequest(sender, handler.selector)).data).toBeDefined();
 	});
 
-	test("protocol is chosen after handlers run", async () => {
+	test("handler sets signer and protocol", async () => {
 		const ezccip = new EZCCIP();
 		const signer = generatePrivateKey();
 		const handler = ezccip.addHandler("function f()", (_, ctx) => {
-			expect(ctx.protocol).toBeUndefined();
+			expect(ctx.protocol).toBe("raw");
 			ctx.signer = signer;
+			ctx.protocol = "ens";
 		});
 		const { data, context } = await ezccip.handleRequest(sender, handler.selector);
-		expect(context.protocol).toBeUndefined();
+		expect(context.protocol).toBe("ens");
 		const verified = await verifyResponse({
 			protocol: "ens",
 			response: data,
@@ -291,7 +287,7 @@ describe("handleRead", () => {
 
 	test("history", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("f(string s, uint256 x) returns (uint256)", (_, __, history) => {
+		const handler = ezccip.addHandler("function f(string s, uint256 x) returns (uint256)", (_, __, history) => {
 			history.show = ["custom"];
 			history.name = "Chonk";
 			return [0n];
@@ -354,10 +350,13 @@ describe("multicall", () => {
 	});
 });
 
-test("unknown protocol is rejected early", () => {
+test("unknown protocol", () => {
 	expect(() => new EZCCIP({ protocol: "nope" as never })).toThrow("unknown protocol");
-	const ezccip = new EZCCIP();
-	ezccip.addHandler("f()", (_, ctx) => {
+	expect(() => {
+		new EZCCIP().protocol = "nope" as never;
+	}).toThrow("unknown protocol");
+	const ezccip = new EZCCIP({ signer: generatePrivateKey() });
+	ezccip.addHandler("function f()", (_, ctx) => {
 		ctx.protocol = "nope" as never;
 	});
 	expect(ezccip.handleRequest("0x0000000000000000000000000000000000000001", "0x26121ff0")).rejects.toThrow(

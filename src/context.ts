@@ -13,8 +13,8 @@ export type ReadContext = {
 	readonly calldata: Hex;
 	/** Contract that will verify the response. */
 	origin: Address;
-	/** Signing protocol. `undefined` means `"ens"` with a signer, otherwise `"raw"`. */
-	protocol: Protocol | undefined;
+	/** Signing protocol. */
+	protocol: Protocol;
 	/** A private key or eg. a viem `LocalAccount`. */
 	signer: SignerLike | undefined;
 	/** Response lifetime in seconds. */

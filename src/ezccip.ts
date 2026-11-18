@@ -16,7 +16,7 @@ import { MULTICALL, RESOLVE } from "./ens/abi.js";
 import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError, encodeErrorString } from "./errors.js";
 import { History } from "./history.js";
-import { checkProtocol, type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
+import { checkProtocol, type Protocol, type Signer, type SignerLike, signResponse, toSigner } from "./signing.js";
 import type { BytesLike, Handler, HandlerFunction, ResponseOptions } from "./types.js";
 import { bytesLikeToHex, checkOrigin, checkTTL, decodeArgs, getSelector } from "./utils.js";
 
@@ -39,11 +39,10 @@ export type HandleRequestReturnType = {
 	history: History;
 };
 
-/** Human-readable function signature, with or without the `function` prefix. */
-type ParseFunction<signature extends string> = Extract<
-	ParseAbiItem<signature extends `function ${string}` ? signature : `function ${signature}`>,
-	AbiFunction
->;
+/** Human-readable function signature, eg. `"function f(uint256 x) returns (string)"`. */
+type FunctionSignature = `function ${string}`;
+
+type ParseFunction<signature extends FunctionSignature> = Extract<ParseAbiItem<signature>, AbiFunction>;
 
 const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
 
@@ -61,15 +60,23 @@ const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
  * ```
  */
 export class EZCCIP {
-	readonly #signer: Signer | undefined;
-	readonly #protocol: Protocol | undefined;
+	#signer: Signer | undefined;
+	#protocol: Protocol;
 	readonly #ttl: number;
 	readonly #handlers = new Map<Hex, Handler<any>>();
 
 	constructor({ signer, protocol, ttl = 60 }: EZCCIPOptions = {}) {
 		this.#signer = signer ? toSigner(signer) : undefined;
-		this.#protocol = protocol && checkProtocol(protocol);
+		this.#protocol = checkProtocol(protocol ?? (signer ? "ens" : "raw"));
 		this.#ttl = checkTTL(ttl);
+	}
+
+	/** Default signer. Set a private key or eg. a viem `LocalAccount`, or `undefined` to clear it. */
+	get signer(): Signer | undefined {
+		return this.#signer;
+	}
+	set signer(signer: SignerLike | undefined) {
+		this.#signer = signer ? toSigner(signer) : undefined;
 	}
 
 	/** Address of the default signer. */
@@ -77,9 +84,12 @@ export class EZCCIP {
 		return this.#signer?.address;
 	}
 
-	/** Default protocol. */
+	/** Default protocol. (default: `"ens"` if constructed with a signer, otherwise `"raw"`) */
 	get protocol(): Protocol {
-		return this.#protocol ?? (this.#signer ? "ens" : "raw");
+		return this.#protocol;
+	}
+	set protocol(protocol: Protocol) {
+		this.#protocol = checkProtocol(protocol);
 	}
 
 	/** All handlers. (`multicall` is built in, not a handler.) */
@@ -97,7 +107,7 @@ export class EZCCIP {
 	 * ezccip.addHandler(getAbiItem({ abi, name: "f" }), ([x], ctx) => [x]);
 	 * ```
 	 */
-	addHandler<const signature extends string>(
+	addHandler<const signature extends FunctionSignature>(
 		signature: signature,
 		fn: HandlerFunction<ParseFunction<signature>>,
 	): Handler<ParseFunction<signature>>;
@@ -106,12 +116,7 @@ export class EZCCIP {
 		fn: HandlerFunction<abiFunction>,
 	): Handler<abiFunction>;
 	addHandler(abiFunction: string | AbiFunction, fn: (...args: any[]) => any): Handler<any> {
-		if (typeof abiFunction === "string") {
-			const signature = abiFunction.trim();
-			abiFunction = parseAbiItem(
-				signature.startsWith("function ") ? signature : `function ${signature}`,
-			) as AbiFunction;
-		}
+		if (typeof abiFunction === "string") abiFunction = parseAbiItem(abiFunction) as AbiFunction;
 		if (abiFunction?.type !== "function") throw new TypeError("expected function");
 		const selector = toFunctionSelector(abiFunction);
 		if (selector === MULTICALL_SELECTOR) throw new TypeError("multicall is built in");
@@ -179,14 +184,14 @@ export class EZCCIP {
 
 	/** Signs a result as the handlers left the context. */
 	async #sign(calldata: Hex, result: Hex, ctx: ReadContext): Promise<Hex> {
-		const signer = ctx.signer ? toSigner(ctx.signer) : undefined;
-		const protocol = ctx.protocol ? checkProtocol(ctx.protocol) : signer ? "ens" : "raw";
+		const { protocol, signer } = ctx;
 		const origin = checkOrigin(ctx.origin);
 		const ttl = checkTTL(ctx.ttl);
 		if (protocol === "raw") return result;
 		if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
 		const expires = BigInt(Math.floor(Date.now() / 1000 + ttl));
-		return signResponse({ protocol, signer, origin, expires, calldata, result });
+		// an unknown protocol throws in getResponseHash()
+		return signResponse({ protocol, signer: toSigner(signer), origin, expires, calldata, result });
 	}
 
 	async #call(calldata: Hex, ctx: ReadContext, history: History, isSubcall: boolean): Promise<Hex> {
