@@ -3,6 +3,7 @@ import type { EZCCIP } from "./ezccip.js";
 import {
 	CORS_HEADERS,
 	describeError,
+	formatOrigin,
 	type HTTPOptions,
 	originFromQuery,
 	PREFLIGHT_HEADERS,
@@ -34,11 +35,11 @@ export function createFetchHandler(
 		const url = new URL(request.url);
 		try {
 			const { sender, data: calldata } = await parseCCIPReadRequest(request);
-			const { data, history } = await ezccip.handleRequest(sender, calldata, {
+			const { data, context, history } = await ezccip.handleRequest(sender, calldata, {
 				...parseOrigin(url),
 				extra: { ...extra },
 			});
-			if (log) console.log(new Date(), url.pathname, String(history));
+			if (log) console.log(new Date(), formatOrigin(context), String(history));
 			return Response.json({ data }, { headers });
 		} catch (error) {
 			const status = errorStatus(error);

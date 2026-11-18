@@ -3,6 +3,7 @@
  * @module
  */
 import type { Address, Hex } from "viem";
+import type { ReadContext } from "./context.js";
 import { CCIPReadError } from "./errors.js";
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request. */
@@ -81,6 +82,11 @@ export function originFromQuery(url: URL): RequestOrigin {
 	const chain = url.searchParams.get("chainId") ?? undefined;
 	if (chain !== undefined && !/^\d+$/.test(chain)) throw new CCIPReadError("invalid chainId", { status: 400 });
 	return { origin: origin as Address | undefined, chainId: chain === undefined ? undefined : Number(chain) };
+}
+
+/** @internal Where a request came from, for logging: `{chainId}:{origin}`, with `?` for an unknown chain. */
+export function formatOrigin({ chainId, origin }: ReadContext): string {
+	return `${chainId ?? "?"}:${origin}`;
 }
 
 /** @internal What to log for an error: the stack trace if unexpected, otherwise the message. */

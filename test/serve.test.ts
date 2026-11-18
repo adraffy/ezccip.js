@@ -43,7 +43,7 @@ describe("serveEZCCIP", () => {
 		await ccip.shutdown();
 		expect(lines).toHaveLength(4);
 		expect(lines[0]).toBe(`Serving "raw" ${ccip.endpoint}`);
-		expect(lines[1]).toMatch(/ \/ f\(1\)$/);
+		expect(lines[1]).toMatch(new RegExp(` \\?:${SENDER} f\\(1\\)$`));
 		expect(lines[2]).toMatch(/ POST \/ 500 Error: chonk/);
 		expect(lines[3]).toMatch(/^Shutdown<\d+ms>$/);
 	});

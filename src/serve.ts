@@ -13,6 +13,7 @@ import {
 	type CCIPReadRequest,
 	CORS_HEADERS,
 	describeError,
+	formatOrigin,
 	type HTTPOptions,
 	originFromQuery,
 	PREFLIGHT_HEADERS,
@@ -89,11 +90,11 @@ export async function serveEZCCIP(
 		const ip = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
 		try {
 			const { sender, data: calldata } = await readRequest(req, url);
-			const { data, history } = await ezccip.handleRequest(sender, calldata, {
+			const { data, context, history } = await ezccip.handleRequest(sender, calldata, {
 				...parseOrigin(url),
 				extra: { ...extra, ip },
 			});
-			print?.(ip, url.pathname, String(history));
+			print?.(ip, formatOrigin(context), String(history));
 			sendJSON(res, 200, { data }, headers);
 		} catch (error) {
 			const status = errorStatus(error);
