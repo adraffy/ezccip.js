@@ -56,7 +56,7 @@ export interface ENSRecord {
 	/** [EIP-619](https://github.com/ethereum/EIPs/pull/619): `{x, y}` or already ABI-encoded */
 	pubkey?(): Maybe<{ x: bigint | Hex; y: bigint | Hex } | BytesLike>;
 	/** [ENSIP-4](https://docs.ens.domains/ensip/4): `{type, data}` or already ABI-encoded */
-	ABI?(contentTypes: bigint): Maybe<{ type: bigint | number; data: BytesLike } | BytesLike>;
+	ABI?(contentTypes: bigint): Maybe<{ type: bigint; data: BytesLike } | BytesLike>;
 }
 
 export type ProcessENSIP10Options = {
@@ -180,7 +180,7 @@ const PROFILES = new Map<Hex, Profile>([
 		if (history) history.show = [formatContentTypes(contentTypes)];
 		const value = await record.ABI?.(contentTypes);
 		if (isBytesLike(value)) return value;
-		return value ? [BigInt(value.type), bytesLikeToHex(value.data)] : [0n, "0x" as Hex];
+		return value ? [value.type, bytesLikeToHex(value.data)] : [0n, "0x" as Hex];
 	}),
 	// not implemented:
 	// https://github.com/ensdomains/ens-contracts/blob/staging/contracts/resolvers/profiles/IInterfaceResolver.sol
@@ -211,30 +211,28 @@ function formatContentTypes(contentTypes: bigint) {
 	return v.join("|");
 }
 
-/** Looks up the record for a name. Return nothing if the name does not exist. */
+/**
+ * Looks up the record for a name.
+ * Return nothing (`undefined` or `null`) if the name does not exist: `resolve()` reverts `UnreachableName`.
+ * Return `{}` if the name exists without records: every profile answers empty.
+ */
 export type ENSRecordProvider = (name: string, ctx: ReadContext, history: History) => Maybe<ENSRecord>;
 
 export type ENSIP10Parameters = ProcessENSIP10Options & {
 	/** Looks up the record for a name. */
 	resolve: ENSRecordProvider;
-	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
-	unreachableAsEmpty?: boolean;
 };
 
 /**
  * Creates a handler for [ENSIP-10](https://docs.ens.domains/ensip/10) `resolve(bytes name, bytes data)`.
  * Note: the name is not normalized.
  */
-export function createENSIP10Handler({
-	resolve,
-	unreachableAsEmpty,
-	...options
-}: ENSIP10Parameters): HandlerFunction<typeof RESOLVE> {
+export function createENSIP10Handler({ resolve, ...options }: ENSIP10Parameters): HandlerFunction<typeof RESOLVE> {
 	return async ([dnsname, data], ctx, history) => {
 		const name = dnsDecodeName(dnsname);
 		history.show = [name];
-		const record = (await resolve(name, ctx, history)) ?? undefined; // null is nothing too
-		if (!record && !unreachableAsEmpty) {
+		const record = await resolve(name, ctx, history);
+		if (!record) {
 			history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}

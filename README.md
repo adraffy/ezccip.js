@@ -53,6 +53,8 @@ ezccip.addAbiHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
 // which handles resolve() automatically
 ezccip.enableENSIP10({
 	async resolve(name, ctx) {
+		// return nothing (undefined or null) if the name doesn't exist: reverts UnreachableName
+		// return {} if the name exists without records: every profile answers empty
 		return {
 			text(key) {
 				switch (key) {
@@ -64,7 +66,6 @@ ezccip.enableENSIP10({
 			},
 		};
 	},
-	// unreachableAsEmpty: false, // unknown names revert UnreachableName
 });
 
 // signer and protocol can change later (the protocol isn't changed by setting a signer)
@@ -135,7 +136,10 @@ await ccip.shutdown();
 await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
 
 // with ENSIP-10 options: enableENSIP10() returns the instance
-await serveEZCCIP(new EZCCIP({ signer: privateKey }).enableENSIP10({ resolve, unreachableAsEmpty: true }));
+await serveEZCCIP(new EZCCIP({ signer: privateKey }).enableENSIP10({ resolve, multicall: false }));
+
+// every name exists: unknown names answer empty instead of UnreachableName
+await serveEZCCIP((name) => db.get(name) ?? {});
 ```
 
 #### createFetchHandler()
@@ -180,6 +184,19 @@ await ezccip.handleRequest(sender, calldata, { extra: { ip } });
   - this is what the HTTP adapters do by default; pass `parseOrigin: (url: URL) => Address | undefined` to replace it
 - or, pass `origin` to `handleRequest(sender, calldata, { origin })`
 - if there's no origin, `origin = sender`
+
+### Unknown names vs empty records
+
+What `resolve(name, ctx, history)` returns decides how `resolve()` is answered:
+
+- nothing (`undefined` or `null`) &rarr; the name doesn't exist: reverts `UnreachableName(bytes)`
+- `{}` &rarr; the name exists without records: every profile answers empty (`""`, `0x`, the zero address)
+- a record &rarr; each profile calls its method; missing methods and missing values answer empty
+
+```ts
+resolve: (name) => db.get(name); // unknown names revert UnreachableName
+resolve: (name) => db.get(name) ?? {}; // every name exists
+```
 
 ### processENSIP10()
 
@@ -234,6 +251,7 @@ bun run smoke  # build, then run dist/ on Node
 - `serveEZCCIP` sets `ctx.extra.ip`; `context.url` is gone (use `parseOrigin` or call `handleRequest()` yourself)
 - `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
 - `History` only builds the log line: set `name` or `show` (an array, or `false`); `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`
-- `ENSRecord.ABI(contentTypes)` receives a `bigint`
+- `ENSRecord.ABI(contentTypes)` receives a `bigint` and returns `type` as a `bigint`; `pubkey()` returns `x` and `y` as `bigint` or `Hex` (no `number`)
+- `unreachableAsEmpty` removed &mdash; return `{}` from `resolve` for names that exist without records (see [Unknown names vs empty records](#unknown-names-vs-empty-records))
 - `labels_from_dns_encoded` &rarr; `dnsDecodeLabels` (or `dnsDecodeName` for the joined name), `error_with` &rarr; `CCIPReadError`
 - `RESOLVE_ABI` &rarr; `resolverAbi`; `multicall` is no longer a handler (`findHandler("multicall")` is `undefined`)

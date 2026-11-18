@@ -122,10 +122,10 @@ describe("serveEZCCIP", () => {
 	});
 
 	test("chained enableENSIP10 with options", async () => {
-		await using ccip = await serveEZCCIP(
-			new EZCCIP().enableENSIP10({ resolve: () => undefined, unreachableAsEmpty: true }),
-			{ cors: false, log: false },
-		);
+		await using ccip = await serveEZCCIP(new EZCCIP().enableENSIP10({ resolve: () => ({}), multicall: false }), {
+			cors: false,
+			log: false,
+		});
 		const text = parseAbiItem("function text(bytes32, string) returns (string)");
 		const resolve = parseAbiItem("function resolve(bytes, bytes) returns (bytes)");
 		const data = encodeFunctionData({
@@ -135,7 +135,7 @@ describe("serveEZCCIP", () => {
 		const res = await post(ccip.endpoint, data);
 		expect(res.headers.get("access-control-allow-origin")).toBeNull();
 		const { data: answer } = (await res.json()) as { data: Hex };
-		expect(decodeFunctionResult({ abi: [text], data: answer })).toBe(""); // not UnreachableName
+		expect(decodeFunctionResult({ abi: [text], data: answer })).toBe(""); // {} is empty, not UnreachableName
 	});
 
 	test("resolve function: default signer", async () => {

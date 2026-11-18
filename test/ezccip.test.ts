@@ -431,16 +431,19 @@ describe("enableENSIP10", () => {
 		expect(String(res.history)).toBe("resolve(raffy.eth).text(name)");
 	});
 
-	test("unreachable (default)", async () => {
-		const ezccip = new EZCCIP();
-		ezccip.enableENSIP10({ resolve: () => undefined });
-		const res = await ezccip.handleRequest(sender, resolve("0x00"));
-		expect(res.data).toBe(encodeErrorResult({ abi: [UNREACHABLE_NAME], args: ["0x00"] }));
-	});
+	for (const value of [undefined, null]) {
+		test(`${value} => unreachable`, async () => {
+			const ezccip = new EZCCIP();
+			ezccip.enableENSIP10({ resolve: () => value });
+			const res = await ezccip.handleRequest(sender, resolve("0x00"));
+			expect(res.data).toBe(encodeErrorResult({ abi: [UNREACHABLE_NAME], args: ["0x00"] }));
+			expect(String(res.history)).toBe("resolve()<UnreachableName>");
+		});
+	}
 
-	test("unreachableAsEmpty", async () => {
+	test("{} => empty", async () => {
 		const ezccip = new EZCCIP();
-		ezccip.enableENSIP10({ resolve: () => undefined, unreachableAsEmpty: true });
+		ezccip.enableENSIP10({ resolve: () => ({}) });
 		const res = await ezccip.handleRequest(sender, resolve("0x00"));
 		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("");
 	});

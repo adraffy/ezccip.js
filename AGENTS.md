@@ -59,6 +59,7 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 - **`multicall`** is handled in `#call`, not registered as a handler, so it can't be replaced and isn't listed in `handlers`.
 - **`History`** only exists to build the log line: `name`, `show` (`readonly unknown[] | false`), `error`, `children`, `inner`. Don't add fields that aren't printed.
 - **Public exports** are listed explicitly in `src/index.ts`. Keep internal helpers (eg. `encodeErrorString`, `formatCoinType`, the ABI items) out of it; tests may import internal modules directly.
+- **Unknown vs empty**: a record provider returning nothing (`undefined`/`null`) means `UnreachableName`; `{}` means the name exists with empty records. There is no option for this.
 - **ENSIP-10 answers** are built from typed ABI items in `src/ens/abi.ts` via `profile(abiItem, answer)`, so `args` and results are type-checked. Add new profiles the same way. EVM `addr()` values must be 20 bytes or empty (`toEVMAddress`).
 - **Object parameters**: `enableENSIP10({ resolve, ...options })` (returns the instance, for chaining) and the signing functions take a single object. `serveEZCCIP` takes an `EZCCIP` or a `resolve` function, then options; only the `resolve` form creates the instance, with a random signer unless one is given.
 - **Multicall** is only answered as the outer call; subcalls cannot be `multicall()`. Inside `resolve()`, `processENSIP10` allows one `multicall()` at the top of the inner data, and its subcalls cannot be `multicall()` either. There is no recursion limit option.
