@@ -7,12 +7,12 @@
 	"author": "raffy.eth",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/namestonehq/ezccip.js.git"
+		"url": "git+https://github.com/adraffy/ezccip.js.git"
 	},
 	"bugs": {
-		"url": "https://github.com/namestonehq/ezccip.js/issues"
+		"url": "https://github.com/adraffy/ezccip.js/issues"
 	},
-	"homepage": "https://github.com/namestonehq/ezccip.js#readme",
+	"homepage": "https://github.com/adraffy/ezccip.js#readme",
 	"keywords": [
 		"ENS",
 		"Ethereum Naming System",

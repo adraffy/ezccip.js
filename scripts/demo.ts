@@ -28,7 +28,12 @@ ezccip.enableENSIP10({
 				}
 			},
 			data(key) {
-				if (key === "test") return "0x1234";
+				switch (key) {
+					case "short":
+						return "0x1234";
+					case "long":
+						return crypto.getRandomValues(new Uint8Array(128)); // new every request
+				}
 			},
 			text(key) {
 				switch (key) {
@@ -40,6 +45,8 @@ ezccip.enableENSIP10({
 						return `Connection from ${ctx.extra.ip}`; // from serveEZCCIP();
 					case "avatar":
 						return "https://raffy.xyz/ens.jpg";
+					case "header":
+						return "https://raffy.xyz/header.jpg";
 					case "url":
 						return "https://github.com/adraffy/ezccip.js";
 					case "location":
