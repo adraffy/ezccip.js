@@ -148,9 +148,9 @@ import { createFetchHandler } from "@namestone/ezccip";
 // Bun / Cloudflare Workers / Deno
 export default { fetch: createFetchHandler(ezccip) };
 
-// Bun, with the client's IP
+// or pass your own extra values
 const handler = createFetchHandler(ezccip);
-Bun.serve({ port: 8000, fetch: (req, server) => handler(req, { ip: server.requestIP(req)?.address }) });
+Bun.serve({ port: 8000, fetch: (req) => handler(req, { region: "us" }) });
 ```
 
 #### Extra

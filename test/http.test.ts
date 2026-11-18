@@ -154,8 +154,8 @@ describe("createFetchHandler", () => {
 		const fetch = createFetchHandler(make(), { log: true });
 		await post(fetch);
 		await post(fetch, "/", { sender: SENDER, data: toFunctionSelector(fail) });
-		expect(lines[0]).toMatch(/ \/ getOrigin\(\)$/);
-		expect(lines[1]).toMatch(/ POST \/ 500 Error: secret/);
+		expect(lines[0]).toBe("/ getOrigin()");
+		expect(lines[1]).toBe("POST / 500 Error: secret");
 	});
 
 	test("extra", async () => {
