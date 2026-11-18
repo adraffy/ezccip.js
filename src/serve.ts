@@ -57,7 +57,7 @@ export type EZCCIPServer = {
  *
  * @example
  * ```ts
- * import { serveEZCCIP } from "@namestone/ezccip/serve";
+ * import { serveEZCCIP } from "@adraffy/ezccip/serve";
  * const ccip = await serveEZCCIP(ezccip, { port: 8016 });
  * // ...
  * await ccip.shutdown();

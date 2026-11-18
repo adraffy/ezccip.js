@@ -2,7 +2,7 @@
 
 Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler for ENS and arbitrary functions.
 
-`bun add @namestone/ezccip viem` / `npm i @namestone/ezccip viem` (Node 20+) [&check;](https://www.npmjs.com/package/@namestone/ezccip)
+`bun add @adraffy/ezccip viem` / `npm i @adraffy/ezccip viem` (Node 20+) [&check;](https://www.npmjs.com/package/@adraffy/ezccip)
 
 - TypeScript, ESM-only, built on [viem](https://viem.sh) (peer dependency)
 - handler arguments and return values are typed from the ABI
@@ -22,8 +22,8 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 ## Usage
 
 ```ts
-import { createFetchHandler, EZCCIP } from "@namestone/ezccip";
-import { serveEZCCIP } from "@namestone/ezccip/serve";
+import { createFetchHandler, EZCCIP } from "@adraffy/ezccip";
+import { serveEZCCIP } from "@adraffy/ezccip/serve";
 import { getAbiItem } from "viem";
 
 const ezccip = new EZCCIP({
@@ -78,7 +78,7 @@ console.log(history.toString()); // eg. resolve(raffy.eth).text(name)
 
 // or serve it over HTTP
 export default { fetch: createFetchHandler(ezccip) }; // Bun, Deno, Cloudflare Workers, ...
-await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@namestone/ezccip/serve")
+await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@adraffy/ezccip/serve")
 ```
 
 ### Handlers
@@ -122,7 +122,7 @@ Both adapters answer `POST {sender, data}` and `GET .../{sender}/{data}.json` wi
 Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Deno) for an `EZCCIP` instance, or for an ENSIP-10 `resolve` function: `serveEZCCIP(resolve, options)` is `serveEZCCIP(new EZCCIP(options).enableENSIP10({ resolve }), options)`, signed with a random key unless `signer` is set. Request bodies over 1 MiB are rejected. It logs startup, every response, every error, and shutdown unless `log: false`.
 
 ```ts
-import { serveEZCCIP } from "@namestone/ezccip/serve";
+import { serveEZCCIP } from "@adraffy/ezccip/serve";
 
 const ccip = await serveEZCCIP(ezccip, { port: 8016 }); // default: random port
 // 2026-01-01T00:00:00.000Z Serving "tor" 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9 http://localhost:8016
@@ -147,7 +147,7 @@ await serveEZCCIP((name) => db.get(name) ?? {});
 Returns a `fetch(request, extra?) => response` handler for fetch-based runtimes.
 
 ```ts
-import { createFetchHandler } from "@namestone/ezccip";
+import { createFetchHandler } from "@adraffy/ezccip";
 
 // Bun / Cloudflare Workers / Deno
 export default { fetch: createFetchHandler(ezccip) };
@@ -217,7 +217,7 @@ const res = await processENSIP10(record, calldata); // (record, calldata, option
 Checks a signed response the way the onchain verifier would: throws if it has expired, or if `signer` is given and doesn't match.
 
 ```ts
-import { verifyResponse } from "@namestone/ezccip";
+import { verifyResponse } from "@adraffy/ezccip";
 const { result, expires, signer } = await verifyResponse({ protocol: "ens", response, calldata, origin, signer: expected });
 ```
 
@@ -239,7 +239,7 @@ bun run smoke  # build, then run dist/ on Node
 - `ethers` &rarr; `viem` (peer dependency); values are `Hex` strings and `bigint`
 - default protocol is `"ens"` when constructed with a signer (was `"tor"`), otherwise `"raw"`; change it later with `ezccip.protocol = ...` and the signer with `ezccip.signer = ...` (or `undefined`)
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
-- `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
+- `serve()` from `@adraffy/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
 - `register(abi, impl)` &rarr; one function per call: `addFunctionHandler(signature | AbiFunction, (args, ctx, history) => ...)` or `addAbiHandler(abi, functionName, ...)`; signatures must be valid human-readable ABI, starting with `function `
 - extra context keys (eg. `context.ip`) &rarr; `ctx.extra.ip`
 - `ttlSec` &rarr; `ttl`, `signingKey` &rarr; `signer`, and `context.history` &rarr; the handler's third argument

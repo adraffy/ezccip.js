@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working on **ezccip.js** (`@namestone/ezccip`), a turnkey [EIP-3668 CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) gateway library for ENS and arbitrary offchain functions.
+Guidance for coding agents working on **ezccip.js** (`@adraffy/ezccip`), a turnkey [EIP-3668 CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) gateway library for ENS and arbitrary offchain functions.
 
 ## Commands
 
@@ -39,7 +39,7 @@ src/
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
   errors.ts     CCIPReadError (carries HTTP status); publicErrorMessage, encodeErrorString (internal)
-  serve.ts      serveEZCCIP(): node:http quick server (Node, Bun, Deno), separate export "@namestone/ezccip/serve"
+  serve.ts      serveEZCCIP(): node:http quick server (Node, Bun, Deno), separate export "@adraffy/ezccip/serve"
   utils.ts      small internal helpers (some re-exported, eg. asciiize)
   ens/
     abi.ts      resolverAbi (public) and its SCREAMING_CASE items (internal)

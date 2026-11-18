@@ -1,5 +1,5 @@
 {
-	"name": "@namestone/ezccip",
+	"name": "@adraffy/ezccip",
 	"version": "0.2.0",
 	"type": "module",
 	"description": "Turnkey CCIP-Read Handler",

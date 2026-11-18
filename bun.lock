@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@namestone/ezccip",
+      "name": "@adraffy/ezccip",
       "dependencies": {
         "abitype": "^1.2.3",
       },
