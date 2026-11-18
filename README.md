@@ -1,8 +1,11 @@
 # ezccip.js
 
+[![CI](https://github.com/adraffy/ezccip.js/actions/workflows/ci.yml/badge.svg)](https://github.com/adraffy/ezccip.js/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@adraffy/ezccip)](https://www.npmjs.com/package/@adraffy/ezccip)
+
 Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler for ENS and arbitrary functions.
 
-`bun add @adraffy/ezccip viem` / `npm i @adraffy/ezccip viem` (Node 20+) [&check;](https://www.npmjs.com/package/@adraffy/ezccip)
+`bun add @adraffy/ezccip viem` / `npm i @adraffy/ezccip viem` (Node 20+)
 
 - TypeScript, ESM-only, built on [viem](https://viem.sh) (peer dependency)
 - handler arguments and return values are typed from the ABI
