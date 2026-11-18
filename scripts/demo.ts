@@ -1,15 +1,13 @@
-// bun run scripts/demo.ts
+// bun run scripts/demo.ts (PORT=8016)
 
-import { keccak256, stringToBytes } from "viem";
 import pkg from "../package.json" with { type: "json" };
 import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.js";
 import { serveEZCCIP } from "../src/serve.js";
 
 const ezccip = new EZCCIP({
-	// public demo key from its preimage, like the original serve(): do not use in production
-	// key:     0x836df63ac213d059562eff5345da93d2049c9d4a07942d3476e42891fa3713c8
-	// address: 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9
-	signer: keccak256(stringToBytes("ezccip")),
+	// public demo key: do not use in production
+	// address: 0xd00d726b2aD6C81E894DC6B87BE6Ce9c5572D2cd
+	signer: "0xbd1e630bd00f12f0810083ea3bd2be936ead3b2fa84d1bd6690c77da043e9e02",
 	protocol: "tor",
 });
 
@@ -62,5 +60,5 @@ ezccip.enableENSIP10({
 	},
 });
 
-const ccip = await serveEZCCIP(ezccip, { port: 8016 });
+const ccip = await serveEZCCIP(ezccip, { port: Number(process.env.PORT || 8016) });
 process.on("SIGINT", () => ccip.shutdown().then(() => process.exit()));

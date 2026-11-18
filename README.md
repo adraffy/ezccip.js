@@ -17,7 +17,7 @@ Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler f
 
 ## Demo
 
-`bun run start` starts a **TOR** CCIP-Read server on port `8016` (see [scripts/demo.ts](./scripts/demo.ts))
+`bun run start` starts a **TOR** CCIP-Read server on port `8016` (or `PORT`) (see [scripts/demo.ts](./scripts/demo.ts))
 
 ## Usage
 
@@ -126,7 +126,7 @@ Start a [simple `node:http` server](./src/serve.ts) (works on Node, Bun, and Den
 import { serveEZCCIP } from "@adraffy/ezccip/serve";
 
 const ccip = await serveEZCCIP(ezccip, { port: 8016 }); // default: random port
-// 2026-01-01T00:00:00.000Z Serving "tor" 0x24c8D99852e8174CD990d0Cc0A5627232F74FeD9 http://localhost:8016
+// 2026-01-01T00:00:00.000Z Serving "tor" 0xd00d726b2aD6C81E894DC6B87BE6Ce9c5572D2cd http://localhost:8016
 // 2026-01-01T00:00:01.000Z ::1 / resolve(raffy.eth).text(name)
 ccip.endpoint; // "http://localhost:8016"
 ccip.context; // "{signer} {endpoint}"

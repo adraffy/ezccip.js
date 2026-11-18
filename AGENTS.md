@@ -11,7 +11,7 @@ bun run lint     # biome check
 bun run format   # biome check --write (format + organize imports + safe fixes)
 bun test         # bun:test, includes type assertions via expectTypeOf / @ts-expect-error
 bun run build    # tsc -p tsconfig.build.json -> dist/ (ESM + .d.ts)
-bun run start    # scripts/demo.ts on :8016
+bun run start    # scripts/demo.ts on :8016 (or PORT)
 bun run smoke    # build, then run scripts/smoke.mjs against dist/ on Node
 ```
 
