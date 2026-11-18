@@ -1,7 +1,7 @@
 // bun run scripts/demo.ts (PORT=8016)
 
 import pkg from "../package.json" with { type: "json" };
-import { COIN_TYPE_DEFAULT, EZCCIP } from "../src/index.js";
+import { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, EZCCIP } from "../src/index.js";
 import { serveEZCCIP } from "../src/serve.js";
 
 const ezccip = new EZCCIP({
@@ -19,8 +19,12 @@ ezccip.enableENSIP10({
 		return {
 			addr(coinType) {
 				switch (coinType) {
-					case COIN_TYPE_DEFAULT:
-						return "0x51050ec063d393217b436747617ad1c2285aeeee";
+					case COIN_TYPE_ETH:
+						return "0x51050ec063d393217B436747617aD1C2285Aeeee";
+					case COIN_TYPE_DEFAULT: // other EVM chains, unless set below
+						return "0xEB4200f750335eFb67E726485445d302D64B1c8A";
+					case COIN_TYPE_DEFAULT + 8453n: // Base
+						return "0xb404Af9A235Be881335d8898B5B487dc9Cd5ed9D";
 					case 0n:
 						return "0x76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac"; // encoded $btc address: 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa (Satoshi)
 					case 3n:
@@ -60,5 +64,9 @@ ezccip.enableENSIP10({
 	},
 });
 
-const ccip = await serveEZCCIP(ezccip, { port: Number(process.env.PORT || 8016) });
+const ccip = await serveEZCCIP(ezccip, {
+	port: Number(process.env.PORT || 8016),
+	// current TOR deployments sign for this origin, regardless of the URL
+	parseOrigin: () => ({ origin: "0x7CE6Cf740075B5AF6b1681d67136B84431B43AbD" }),
+});
 process.on("SIGINT", () => ccip.shutdown().then(() => process.exit()));
