@@ -6,7 +6,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { generatePrivateKey } from "viem/accounts";
-import type { GetRecord } from "./ens/ensip10.js";
+import type { ENSRecordProvider } from "./ens/ensip10.js";
 import { CCIPReadError, errorStatus, publicErrorMessage } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
 import {
@@ -70,9 +70,9 @@ export type EZCCIPServer = {
  * ```
  */
 export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;
-export function serveEZCCIP(resolve: GetRecord, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
+export function serveEZCCIP(resolve: ENSRecordProvider, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
 export async function serveEZCCIP(
-	arg: EZCCIP | GetRecord,
+	arg: EZCCIP | ENSRecordProvider,
 	options: ServeOptions & EZCCIPOptions = {},
 ): Promise<EZCCIPServer> {
 	const ezccip =

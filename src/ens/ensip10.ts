@@ -72,16 +72,16 @@ export type ProcessENSIP10Options = {
  * Unsupported profiles are answered with `UnsupportedResolverProfile(bytes4)`.
  */
 export function processENSIP10(
-	record: ENSRecord | null | undefined,
+	record: ENSRecord,
 	calldata: Hex,
 	options: ProcessENSIP10Options = {},
 	history?: History,
 ): Promise<Hex> {
-	return answer(record ?? undefined, calldata, options, history, false);
+	return answer(record, calldata, options, history, false);
 }
 
 async function answer(
-	record: ENSRecord | undefined,
+	record: ENSRecord,
 	calldata: Hex,
 	options: ProcessENSIP10Options,
 	history: History | undefined,
@@ -115,7 +115,7 @@ async function answer(
 }
 
 type Answer<abiFunction extends AbiFunction> = (
-	record: ENSRecord | undefined,
+	record: ENSRecord,
 	args: AbiParametersToPrimitiveTypes<abiFunction["inputs"]>,
 	options: ProcessENSIP10Options,
 	history: History | undefined,
@@ -139,44 +139,44 @@ const PROFILES = new Map<Hex, Profile>([
 		return [await Promise.all(results)];
 	}),
 	profile(ADDR, async (record, _, { defaultAddress }) => {
-		let value = await record?.addr?.(COIN_TYPE_ETH);
+		let value = await record.addr?.(COIN_TYPE_ETH);
 		if (isEmpty(value) && defaultAddress !== false) {
-			value = await record?.addr?.(COIN_TYPE_DEFAULT);
+			value = await record.addr?.(COIN_TYPE_DEFAULT);
 		}
 		return [isEmpty(value) ? zeroAddress : toEVMAddress(value)];
 	}),
 	profile(ADDR_COIN_TYPE, async (record, [, coinType], { defaultAddress }, history) => {
 		if (history) history.show = [formatCoinType(coinType)];
 		const isEVM = chainFromCoinType(coinType) !== undefined;
-		let value = await record?.addr?.(coinType);
+		let value = await record.addr?.(coinType);
 		if (isEmpty(value) && isEVM && coinType !== COIN_TYPE_DEFAULT && defaultAddress !== false) {
-			value = await record?.addr?.(COIN_TYPE_DEFAULT);
+			value = await record.addr?.(COIN_TYPE_DEFAULT);
 		}
 		if (isEmpty(value)) return ["0x" as Hex];
 		return [isEVM ? toEVMAddress(value) : bytesLikeToHex(value)];
 	}),
 	profile(HAS_ADDR, async (record, [, coinType], _, history) => {
 		if (history) history.show = [formatCoinType(coinType)];
-		return [!isEmpty(await record?.addr?.(coinType))];
+		return [!isEmpty(await record.addr?.(coinType))];
 	}),
 	profile(DATA, async (record, [, key]) => {
-		const value = await record?.data?.(key);
+		const value = await record.data?.(key);
 		return [isEmpty(value) ? "0x" : bytesLikeToHex(value)];
 	}),
-	profile(TEXT, async (record, [, key]) => [(await record?.text?.(key)) || ""]),
+	profile(TEXT, async (record, [, key]) => [(await record.text?.(key)) || ""]),
 	profile(CONTENTHASH, async (record) => {
-		const value = await record?.contenthash?.();
+		const value = await record.contenthash?.();
 		return [isEmpty(value) ? "0x" : bytesLikeToHex(value)];
 	}),
-	profile(NAME, async (record) => [(await record?.name?.()) || ""]),
+	profile(NAME, async (record) => [(await record.name?.()) || ""]),
 	profile(PUBKEY, async (record) => {
-		const value = await record?.pubkey?.();
+		const value = await record.pubkey?.();
 		if (isBytesLike(value)) return value;
 		return value ? [BigInt(value.x), BigInt(value.y)] : [0n, 0n];
 	}),
 	profile(ABI, async (record, [, contentTypes], _, history) => {
 		if (history) history.show = [formatContentTypes(contentTypes)];
-		const value = await record?.ABI?.(contentTypes);
+		const value = await record.ABI?.(contentTypes);
 		if (isBytesLike(value)) return value;
 		return value ? [BigInt(value.type), bytesLikeToHex(value.data)] : [0n, "0x" as Hex];
 	}),
@@ -205,11 +205,11 @@ function formatContentTypes(contentTypes: bigint) {
 }
 
 /** Looks up the record for a name. Return nothing if the name does not exist. */
-export type GetRecord = (name: string, ctx: ReadContext, history: History) => Maybe<ENSRecord>;
+export type ENSRecordProvider = (name: string, ctx: ReadContext, history: History) => Maybe<ENSRecord>;
 
 export type ENSIP10Parameters = ProcessENSIP10Options & {
 	/** Looks up the record for a name. */
-	resolve: GetRecord;
+	resolve: ENSRecordProvider;
 	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
 	unreachableAsEmpty?: boolean;
 };
@@ -232,6 +232,6 @@ export function createENSIP10Handler({
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}
 		// already encoded since: abi.decode(abi.encode(x)) == x
-		return processENSIP10(record, data, options, history.addInner(data));
+		return processENSIP10(record ?? {}, data, options, history.addInner(data));
 	};
 }

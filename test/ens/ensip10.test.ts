@@ -35,7 +35,7 @@ const multicall = parseAbiItem("function multicall(bytes[]) returns (bytes[])");
 
 /** Encodes a call, answers it from a record, and decodes the result. */
 async function query<const fn extends AbiFunction>(
-	record: ENSRecord | undefined,
+	record: ENSRecord,
 	abiFunction: fn,
 	args: readonly unknown[],
 	options?: ProcessENSIP10Options,
@@ -154,7 +154,7 @@ describe("profiles", () => {
 		expect(await query(record, ABI, [NODE, 1n])).toEqual([1n, "0x7b7d"]);
 		expect(await query(record, ABI, [NODE, 2n])).toEqual([0n, "0x"]);
 	});
-	test("no record", async () => expect(await query(undefined, text, [NODE, "name"])).toBe(""));
+	test("empty record", async () => expect(await query({}, text, [NODE, "name"])).toBe(""));
 	test("multicall", async () => {
 		const history = new History("0x");
 		const calls = [
@@ -185,11 +185,11 @@ describe("profiles", () => {
 describe("throwUnsupported", () => {
 	const selector = "0x12345678";
 	test("false (default)", async () => {
-		expect(await processENSIP10(undefined, selector)).toBe(
+		expect(await processENSIP10({}, selector)).toBe(
 			encodeErrorResult({ abi: [UNSUPPORTED_RESOLVER_PROFILE], args: [selector] }),
 		);
 	});
 	test("true", async () => {
-		expect(processENSIP10(undefined, selector, { throwUnsupported: true })).rejects.toMatchObject({ status: 404 });
+		expect(processENSIP10({}, selector, { throwUnsupported: true })).rejects.toMatchObject({ status: 404 });
 	});
 });

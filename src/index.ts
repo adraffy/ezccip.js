@@ -6,7 +6,7 @@ export {
 	createENSIP10Handler,
 	type ENSIP10Parameters,
 	type ENSRecord,
-	type GetRecord,
+	type ENSRecordProvider,
 	type ProcessENSIP10Options,
 	processENSIP10,
 } from "./ens/ensip10.js";
