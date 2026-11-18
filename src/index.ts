@@ -1,4 +1,4 @@
-export type { CallContext } from "./context.js";
+export type { ReadContext } from "./context.js";
 export { resolverAbi } from "./ens/abi.js";
 export { COIN_TYPE_DEFAULT, COIN_TYPE_ETH, chainFromCoinType } from "./ens/coin-type.js";
 export { dnsDecodeLabels, dnsDecodeName } from "./ens/dns.js";

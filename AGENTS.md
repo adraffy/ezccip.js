@@ -32,9 +32,9 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 src/
   index.ts      public API; explicit named exports only (no `export *`)
   ezccip.ts     EZCCIP class: addHandler/findHandler, dispatch, built-in multicall, handleRequest(sender, calldata, options). No HTTP.
-  context.ts    CallContext: per-call view of request-wide state (+ this call's History)
-  types.ts      shared public types: Handler, HandlerFunction, HandlerResult, ExtraParameter
-  http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS, answer() + logAnswer() (internal)
+  context.ts    ReadContext: the request's shared, mutable state (ctx)
+  types.ts      shared public types: Handler, HandlerFunction, HandlerResult, ResponseOptions
+  http.ts       shared HTTP pieces: parse GET path / POST body, originFromPath, CORS headers, describeError (internal)
   fetch.ts      createFetchHandler(): fetch(Request) => Response adapter
   signing.ts    "raw" | "ens" | "tor" protocols, Signer/SignerLike, signResponse, verifyResponse
   history.ts    History: per-call log entry; tree via children (multicall) and inner (resolve)
@@ -55,7 +55,7 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 
 - **Relative imports use `.js` extensions** (`import { x } from "./http.js"`), even though the files are `.ts`. `tsc` does not rewrite `.ts` specifiers inside emitted `.d.ts` files, so `.ts` imports break consumers.
 - **Types come from the ABI.** `addHandler()` takes one function (a human-readable signature, with or without the `function` prefix, or a viem `AbiFunction`), and the handler's `args` and return tuple are inferred from it. Keep this inference working, and add `expectTypeOf` / `@ts-expect-error` checks in tests when you change handler or context types.
-- **Handler signature** is `(args, ctx, extra) => result`. `CallContext` is a public *interface*; the class is the internal `Context`, created per call, which reads and writes one request-wide `ReadState`: `origin`, `protocol`, `signer`, and `ttl` are intentionally mutable and shared by every call in the request, and their setters validate. `ctx.calldata` and `ctx.history` belong to that call only. Subcalls get their context from `Context.child(calldata)`.
+- **Handler signature** is `(args, ctx, history) => result`, like the original. `ctx` is a `ReadContext`: one plain object per request, shared by every call in it (including `multicall` subcalls). `origin`, `protocol`, `signer`, `ttl`, and `extra` are plain mutable fields with no getters/setters; they are validated once, when signing (`#sign`). `history` is the per-call log entry. Sign with the `calldata` local in `handleRequest`, never `ctx.calldata`.
 - **`multicall`** is handled in `#call`, not registered as a handler, so it can't be replaced and isn't listed in `handlers`.
 - **`History`** only exists to build the log line: `name`, `show` (`readonly unknown[] | false`), `error`, `children`, `inner`. Don't add fields that aren't printed.
 - **Public exports** are listed explicitly in `src/index.ts`. Keep internal helpers (eg. `encodeErrorString`, `formatCoinType`, the ABI items) out of it; tests may import internal modules directly.
@@ -64,12 +64,11 @@ test/           mirrors src/ (test/ens/* for src/ens/*)
 - **Multicall** is only answered as the outer call; subcalls cannot be `multicall()`. Inside `resolve()`, `processENSIP10` allows one `multicall()` at the top of the inner data, and its subcalls cannot be `multicall()` either. There is no recursion limit option.
 - **Results**: a tuple is ABI-encoded with the function outputs, and `Hex`/`Uint8Array` is treated as already encoded. Returning nothing is only allowed (by type) for functions without outputs.
 - **Options are private**: `EZCCIP` copies its options at construction. Don't add a public `options` property; expose a getter if something is needed (eg. `signerAddress`, `protocol`).
-- **Protocol is resolved late**: `ReadState.protocol` may be `undefined`, meaning `"ens"` with a signer, otherwise `"raw"` (`defaultProtocol`), so handlers can set `ctx.signer` alone.
+- **Protocol is resolved late**: `ctx.protocol` may be `undefined`, meaning `"ens"` with a signer, otherwise `"raw"`, so handlers can set `ctx.signer` alone.
 - **Errors**: `CCIPReadError` messages and statuses reach clients (400 bad input, 404 unknown function/profile, 405 method). Any other error is a 500 with message `"internal error"` (see `publicErrorMessage`), and the real error goes to `onError` and `History`. Inside `multicall`, failed subcalls are encoded as `Error(string)` using the same rule.
 - **Generic naming** follows viem: lowercase type parameters (`abiFunction`, `extra`), `XParameters` / `XReturnType` for function inputs and outputs, object parameters for public functions with more than two inputs.
-- **`extra`** is one custom object (eg. `{ env }` on Cloudflare) typed by `EZCCIP<extra>` and passed as the third argument to handlers and `resolve`: `(args, ctx, extra)`. It is threaded through `#call` (including `multicall` subcalls), not stored on `CallContext`, so `CallContext` and the hook events are not generic. It's optional when the type allows `undefined`, otherwise required (see `ExtraParameter`).
-- **Core has no HTTP.** `EZCCIP` knows nothing about `Request`, CORS, URLs, or origin parsing. `handleRequest()` validates input, throws `CCIPReadError`s, and returns `{ data, context }`; origin defaults to `sender`. HTTP lives in the adapters, `createFetchHandler` (`src/fetch.ts`) and `serveEZCCIP` (`src/serve.ts`), which share `answer()`/`logAnswer()` from `src/http.ts` and the options `cors`, `parseOrigin`, `log`, `extra`. `serveEZCCIP` reads `{sender, data}` straight from the `node:http` request; don't route it through a fetch `Request`.
-- **Adapters build `extra` per request** with an `extra(request)` option (required when the `EZCCIP` type needs it). Call it inside `answer()` so a throwing `extra` becomes a 500, not a crashed server.
+- **`extra`** is `ctx.extra: Record<string, unknown>`, not generic. Callers of `handleRequest()` fill it: `serveEZCCIP` copies its `extra` option and sets `ip`; `createFetchHandler` copies the fields of its second argument (eg. Cloudflare `env`).
+- **Core has no HTTP.** `EZCCIP` knows nothing about `Request`, CORS, URLs, or origin parsing. `handleRequest(sender, calldata, { origin, protocol, signer, ttl, extra })` validates input, throws `CCIPReadError`s, and returns `{ data, context, history }`; origin defaults to `sender`. HTTP lives in the adapters, `createFetchHandler` (`src/fetch.ts`) and `serveEZCCIP` (`src/serve.ts`), which each do their own try/catch, logging, and response; they share only parsing helpers, CORS headers, and the options `cors`, `parseOrigin`, `log`. `serveEZCCIP` reads `{sender, data}` straight from the `node:http` request; don't route it through a fetch `Request`.
 - **No signal handlers or global side effects in `src/`.** `serveEZCCIP` logs, but process lifecycle belongs to the caller (see `scripts/demo.ts`).
 - Public API changes should update `README.md` (including the migration section) and `src/index.ts`.
 

@@ -43,7 +43,7 @@ test("default protocol", () => {
 
 test("raw", async () => {
 	const { data, context } = await make().handleRequest(sender, request);
-	expect(context.protocol).toBe("raw");
+	expect(context.protocol).toBeUndefined(); // "raw" without a signer
 	expect(decode(data)).toBe("CHONK");
 });
 

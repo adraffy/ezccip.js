@@ -11,28 +11,32 @@ import {
 	toFunctionSelector,
 	toFunctionSignature,
 } from "viem";
-import { type CallContext, Context, defaultProtocol, type ReadState } from "./context.js";
+import type { ReadContext } from "./context.js";
 import { MULTICALL, RESOLVE } from "./ens/abi.js";
 import { createENSIP10Handler, type ENSIP10Parameters } from "./ens/ensip10.js";
 import { CCIPReadError, encodeErrorString } from "./errors.js";
+import { History } from "./history.js";
 import { checkProtocol, type Protocol, type Signer, signResponse, toSigner } from "./signing.js";
-import type { BytesLike, ExtraParameter, Handler, HandlerFunction, ResponseOptions } from "./types.js";
-import { bytesLikeToHex, checkTTL, decodeArgs, getSelector } from "./utils.js";
+import type { BytesLike, Handler, HandlerFunction, ResponseOptions } from "./types.js";
+import { bytesLikeToHex, checkOrigin, checkTTL, decodeArgs, getSelector } from "./utils.js";
 
 /** Defaults for every request: `protocol`, `signer`, and `ttl`. */
 export type EZCCIPOptions = ResponseOptions;
 
-export type HandleRequestOptions<extra = undefined> = ExtraParameter<extra> &
-	ResponseOptions & {
-		/** Contract that will verify the response. (default: `sender`) */
-		origin?: Address | undefined;
-	};
+export type HandleRequestOptions = ResponseOptions & {
+	/** Contract that will verify the response. (default: `sender`) */
+	origin?: Address | undefined;
+	/** Custom values for handlers, as `ctx.extra`. (default: `{}`) */
+	extra?: Record<string, unknown> | undefined;
+};
 
 export type HandleRequestReturnType = {
 	/** ABI-encoded response for EIP-3668. */
 	data: Hex;
-	/** Context of the outer call. Its `history` describes the whole response. */
-	context: CallContext;
+	/** The request, as the handlers left it. */
+	context: ReadContext;
+	/** What was requested and how it was answered, eg. `resolve(raffy.eth).text(name)`. */
+	history: History;
 };
 
 /** Human-readable function signature, with or without the `function` prefix. */
@@ -42,13 +46,6 @@ type ParseFunction<signature extends string> = Extract<
 >;
 
 const MULTICALL_SELECTOR = toFunctionSelector(MULTICALL);
-
-const ERROR_CONTEXTS = new WeakMap<object, CallContext>();
-
-/** @internal The context of the request that threw `error`, for logging which call failed. */
-export function errorContext(error: unknown): CallContext | undefined {
-	return error && typeof error === "object" ? ERROR_CONTEXTS.get(error) : undefined;
-}
 
 /**
  * Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler.
@@ -62,14 +59,12 @@ export function errorContext(error: unknown): CallContext | undefined {
  * ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
  * const { data } = await ezccip.handleRequest(sender, calldata);
  * ```
- *
- * @typeParam extra - Custom object passed with each request, given to handlers as their third argument.
  */
-export class EZCCIP<extra = undefined> {
+export class EZCCIP {
 	readonly #signer: Signer | undefined;
 	readonly #protocol: Protocol | undefined;
 	readonly #ttl: number;
-	readonly #handlers = new Map<Hex, Handler<any, extra>>();
+	readonly #handlers = new Map<Hex, Handler<any>>();
 
 	constructor({ signer, protocol, ttl = 60 }: EZCCIPOptions = {}) {
 		this.#signer = signer ? toSigner(signer) : undefined;
@@ -84,11 +79,11 @@ export class EZCCIP<extra = undefined> {
 
 	/** Default protocol. */
 	get protocol(): Protocol {
-		return this.#protocol ?? defaultProtocol(this.#signer);
+		return this.#protocol ?? (this.#signer ? "ens" : "raw");
 	}
 
 	/** All handlers. (`multicall` is built in, not a handler.) */
-	get handlers(): Handler<AbiFunction, extra>[] {
+	get handlers(): Handler[] {
 		return [...this.#handlers.values()];
 	}
 
@@ -104,13 +99,13 @@ export class EZCCIP<extra = undefined> {
 	 */
 	addHandler<const signature extends string>(
 		signature: signature,
-		fn: HandlerFunction<ParseFunction<signature>, extra>,
-	): Handler<ParseFunction<signature>, extra>;
+		fn: HandlerFunction<ParseFunction<signature>>,
+	): Handler<ParseFunction<signature>>;
 	addHandler<const abiFunction extends AbiFunction>(
 		abiFunction: abiFunction,
-		fn: HandlerFunction<abiFunction, extra>,
-	): Handler<abiFunction, extra>;
-	addHandler(abiFunction: string | AbiFunction, fn: (...args: any[]) => any): Handler<any, extra> {
+		fn: HandlerFunction<abiFunction>,
+	): Handler<abiFunction>;
+	addHandler(abiFunction: string | AbiFunction, fn: (...args: any[]) => any): Handler<any> {
 		if (typeof abiFunction === "string") {
 			const signature = abiFunction.trim();
 			abiFunction = parseAbiItem(
@@ -126,7 +121,7 @@ export class EZCCIP<extra = undefined> {
 	}
 
 	/** Finds a handler by name, signature, selector, or ABI. */
-	findHandler(key: string | AbiFunction): Handler<AbiFunction, extra> | undefined {
+	findHandler(key: string | AbiFunction): Handler | undefined {
 		if (typeof key !== "string") key = toFunctionSelector(key);
 		if (/^0x[0-9a-f]{8}$/i.test(key)) return this.#handlers.get(key.toLowerCase() as Hex);
 		return this.handlers.find((x) => x.abiFunction.name === key || x.signature === key);
@@ -143,7 +138,7 @@ export class EZCCIP<extra = undefined> {
 	 *
 	 * @returns this instance, for chaining.
 	 */
-	enableENSIP10(parameters: ENSIP10Parameters<extra>): this {
+	enableENSIP10(parameters: ENSIP10Parameters): this {
 		this.addHandler(RESOLVE, createENSIP10Handler(parameters));
 		return this;
 	}
@@ -155,61 +150,55 @@ export class EZCCIP<extra = undefined> {
 	 * @example
 	 * ```ts
 	 * const { sender, data: calldata } = await request.json();
-	 * const { data, context } = await ezccip.handleRequest(sender, calldata);
-	 * console.log(context.history.toString());
+	 * const { data, history } = await ezccip.handleRequest(sender, calldata, { extra: { ip } });
+	 * console.log(history.toString());
 	 * ```
 	 */
 	async handleRequest(
 		sender: Hex,
 		calldata: Hex,
-		...[options]: undefined extends extra
-			? [options?: HandleRequestOptions<extra>]
-			: [options: HandleRequestOptions<extra>]
+		{ origin = sender, protocol, signer, ttl, extra = {} }: HandleRequestOptions = {},
 	): Promise<HandleRequestReturnType> {
 		if (!isAddress(sender, { strict: false })) throw new CCIPReadError("expected sender address", { status: 400 });
 		if (!isHex(calldata) || calldata.length < 10) throw new CCIPReadError("expected calldata", { status: 400 });
-		const origin = options?.origin ?? sender;
 		if (!isAddress(origin, { strict: false })) throw new CCIPReadError("invalid origin", { status: 400 });
-		const state: ReadState = {
+		calldata = calldata.toLowerCase() as Hex;
+		const context: ReadContext = {
 			sender: getAddress(sender),
+			calldata,
 			origin: getAddress(origin),
-			protocol: options?.protocol ? checkProtocol(options.protocol) : this.#protocol,
-			signer: options?.signer ? toSigner(options.signer) : this.#signer,
-			ttl: options?.ttl === undefined ? this.#ttl : checkTTL(options.ttl),
+			protocol: protocol ?? this.#protocol,
+			signer: signer ?? this.#signer,
+			ttl: ttl ?? this.#ttl,
+			extra,
 		};
-		const context = new Context(state, calldata.toLowerCase() as Hex);
-		try {
-			return { data: await this.#respond(context, options?.extra as extra), context };
-		} catch (error) {
-			if (error && typeof error === "object") ERROR_CONTEXTS.set(error, context);
-			throw error;
-		}
+		const history = new History(calldata);
+		const result = await this.#call(calldata, context, history, false);
+		return { data: await this.#sign(calldata, result, context), context, history };
 	}
 
-	async #respond(ctx: Context, extra: extra): Promise<Hex> {
-		const result = await this.#call(ctx, extra, false);
-		const { protocol, signer } = ctx;
+	/** Signs a result as the handlers left the context. */
+	async #sign(calldata: Hex, result: Hex, ctx: ReadContext): Promise<Hex> {
+		const signer = ctx.signer ? toSigner(ctx.signer) : undefined;
+		const protocol = ctx.protocol ? checkProtocol(ctx.protocol) : signer ? "ens" : "raw";
+		const origin = checkOrigin(ctx.origin);
+		const ttl = checkTTL(ctx.ttl);
 		if (protocol === "raw") return result;
 		if (!signer) throw new CCIPReadError(`protocol "${protocol}" requires a signer`);
-		return signResponse({
-			protocol,
-			signer,
-			origin: ctx.origin,
-			expires: BigInt(Math.floor(Date.now() / 1000 + ctx.ttl)),
-			calldata: ctx.calldata,
-			result,
-		});
+		const expires = BigInt(Math.floor(Date.now() / 1000 + ttl));
+		return signResponse({ protocol, signer, origin, expires, calldata, result });
 	}
 
-	async #call(ctx: Context, extra: extra, isSubcall: boolean): Promise<Hex> {
-		const { calldata, history } = ctx;
+	async #call(calldata: Hex, ctx: ReadContext, history: History, isSubcall: boolean): Promise<Hex> {
 		try {
 			const selector = getSelector(calldata);
 			if (selector === MULTICALL_SELECTOR && !isSubcall) {
 				history.name = MULTICALL.name;
 				history.show = false;
 				const [calls] = decodeArgs(MULTICALL, calldata) as readonly [readonly Hex[]];
-				const results = calls.map((call) => this.#call(ctx.child(call), extra, true).catch(encodeErrorString));
+				const results = calls.map((call) =>
+					this.#call(call, ctx, history.addChild(call), true).catch(encodeErrorString),
+				);
 				return encodeAbiParameters(MULTICALL.outputs, [await Promise.all(results)]);
 			}
 			const handler = this.#handlers.get(selector);
@@ -217,7 +206,7 @@ export class EZCCIP<extra = undefined> {
 			history.name = handler.abiFunction.name;
 			const args = decodeArgs(handler.abiFunction, calldata);
 			history.show = args;
-			const result = await handler.fn(args as never, ctx, extra);
+			const result = await handler.fn(args as never, ctx, history);
 			if (!result) return "0x"; // returns ()
 			if (Array.isArray(result)) return encodeAbiParameters(handler.abiFunction.outputs, result as never);
 			return bytesLikeToHex(result as BytesLike); // already encoded

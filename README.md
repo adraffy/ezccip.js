@@ -37,9 +37,9 @@ const ezccip = new EZCCIP({
 ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256)", ([a, b]) => [a + b]);
 
 // or from an existing ABI
-ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx) => {
-	ctx.history.show = [ctx.sender]; // replace arguments of f(...) in logger
-	ctx.history.name = "Chonk"; // rename f() to Chonk() in logger
+ezccip.addHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
+	history.show = [ctx.sender]; // replace arguments of f(...) in logger
+	history.name = "Chonk"; // rename f() to Chonk() in logger
 	ctx.protocol = "raw"; // override signing protocol for this request
 	return "0x..."; // return already-encoded bytes
 });
@@ -63,8 +63,8 @@ ezccip.enableENSIP10({
 });
 
 // answer a request directly
-const { data, context } = await ezccip.handleRequest(sender, calldata); // { origin, ... } optional
-console.log(context.history.toString()); // eg. resolve(raffy.eth).text(name)
+const { data, history } = await ezccip.handleRequest(sender, calldata); // { origin, extra, ... } optional
+console.log(history.toString()); // eg. resolve(raffy.eth).text(name)
 
 // or serve it over HTTP
 export default { fetch: createFetchHandler(ezccip) }; // Bun, Deno, Cloudflare Workers, ...
@@ -73,15 +73,14 @@ await serveEZCCIP(ezccip, { port: 8016 }); // Node, Bun, Deno (from "@namestone/
 
 ### Handlers
 
-`(args, ctx, extra) => result`
+`(args, ctx, history) => result`
 
 - `args` &mdash; decoded arguments
-- `ctx` &mdash; a `CallContext`, one per call:
-  - `calldata` &mdash; this call's calldata
-  - `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
-  - `sender` &mdash; shared by the whole request
-  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Also shared by the whole request, so setting them in any call (eg. inside a `multicall`) affects the entire response. The protocol is chosen after handlers run, so setting `ctx.signer` alone switches the default to `"ens"`
-- `extra` &mdash; your custom object for this request (eg. `{ env }` or the client IP), see [Extra](#extra); `undefined` unless you declare `EZCCIP<Extra>`
+- `ctx` &mdash; a `ReadContext`: one plain object shared by the whole request (every `multicall` subcall gets the same one)
+  - `sender`, `calldata` &mdash; the request
+  - `origin`, `protocol`, `signer`, `ttl` &mdash; how the response is signed. Set them in any call to change the entire response; they're validated when signing. `protocol` is `undefined` unless set, which means `"ens"` with a signer, otherwise `"raw"`, so setting `ctx.signer` alone is enough
+  - `extra` &mdash; custom values from the caller, eg. `ctx.extra.ip`, see [Extra](#extra)
+- `history` &mdash; this call's line in the log: set `name`, or `show` (an array of values to print instead of the arguments, or `false` to hide them)
 - `result` &mdash; tuple of outputs (ABI-encoded for you) or already-encoded `Hex | Uint8Array`. Functions without outputs may return nothing
 
 #### Errors
@@ -107,7 +106,6 @@ Both adapters answer `POST {sender, data}` and `GET .../{sender}/{data}.json` wi
 - `cors` &mdash; add CORS headers and answer `OPTIONS` preflight requests (default: `true`)
 - `parseOrigin: (url: URL) => Address | undefined` &mdash; see [Sender vs Origin](#sender-vs-origin)
 - `log` &mdash; log every response and error with `console.log`
-- `extra: (request) => Extra` &mdash; see [Extra](#extra)
 
 #### serveEZCCIP()
 
@@ -133,31 +131,31 @@ await serveEZCCIP(new EZCCIP({ signer: privateKey }).enableENSIP10({ resolve, un
 
 #### createFetchHandler()
 
-Returns a `fetch(request) => response` handler for fetch-based runtimes.
+Returns a `fetch(request, extra?) => response` handler for fetch-based runtimes.
 
 ```ts
 import { createFetchHandler } from "@namestone/ezccip";
 
-// Bun
-Bun.serve({ port: 8000, fetch: createFetchHandler(ezccip) });
-
 // Bun / Cloudflare Workers / Deno
 export default { fetch: createFetchHandler(ezccip) };
+
+// Bun, with the client's IP
+const handler = createFetchHandler(ezccip);
+Bun.serve({ port: 8000, fetch: (req, server) => handler(req, { ip: server.requestIP(req)?.address }) });
 ```
 
 #### Extra
 
-Handlers (and `resolve`) receive a custom object as their third argument. Declare its type on `EZCCIP`, and the adapters require an `extra` function to build it from each request:
+`ctx.extra` is a `Record<string, unknown>` of custom values for handlers (and `resolve`), filled by whoever calls `handleRequest()`. Handlers may read or add to it.
 
 ```ts
-// Cloudflare Workers: the handler's extra arguments (env, ctx) are passed through
-const ezccip = new EZCCIP<{ env: Env }>();
-ezccip.addHandler("function f() returns (string)", (_, ctx, { env }) => [env.NAME]);
-export default { fetch: createFetchHandler(ezccip, { extra: (request, env: Env) => ({ env }) }) };
+ezccip.addHandler("function whoami() returns (string)", (_, ctx) => [`${ctx.extra.ip}`]);
 
-// node:http: the client's IP
-const ezccip = new EZCCIP<{ ip: string | undefined }>();
-await serveEZCCIP(ezccip, { extra: (req) => ({ ip: req.socket.remoteAddress }) });
+// serveEZCCIP(): the client's ip (x-forwarded-for, or the socket address), plus your own values
+await serveEZCCIP(ezccip, { extra: { region: "us" } }); // ctx.extra = { region: "us", ip: "::1" }
+
+// createFetchHandler(): the fields of its second argument, eg. Cloudflare's env
+export default { fetch: createFetchHandler(ezccip) }; // ctx.extra = { ...env }
 
 // directly
 await ezccip.handleRequest(sender, calldata, { extra: { ip } });
@@ -216,16 +214,15 @@ bun run smoke  # build, then run dist/ on Node
 - default protocol is `"ens"` when a signer is set (was `"tor"`), otherwise `"raw"`
 - `signingKey` &rarr; `signer` (private key or viem `LocalAccount`)
 - `serve()` from `@namestone/ezccip/serve` &rarr; `serveEZCCIP(ezccip, options)` or `serveEZCCIP(resolve, options)` (the default signing key is random; `server` is still a `node:http` server; `signer` &rarr; `ezccip.signerAddress`; `resolvers` &rarr; `parseOrigin`); or `createFetchHandler(ezccip)` for fetch-based runtimes
-- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, extra) => ...)`
-- handlers receive `(args, ctx, extra)`: `context` and `history` are combined into `ctx`, with `ctx.history` for logging
-- extra context keys &rarr; one custom object, passed to handlers as the third argument: `(args, ctx, extra)`
-- `ctx.calldata` is the current call's calldata (inside `multicall`, the subcall)
+- `register(abi, impl)` &rarr; one function per call: `addHandler(signature | AbiFunction, (args, ctx, history) => ...)`
+- extra context keys (eg. `context.ip`) &rarr; `ctx.extra.ip`
+- `ttlSec` &rarr; `ttl`, `signingKey` &rarr; `signer`, and `context.history` &rarr; the handler's third argument
 - `enableENSIP10(fn, options)` &rarr; `enableENSIP10({ resolve: fn, ...options })`; `throwErrors` &rarr; `throwUnsupported`
 - `addr()` values for EVM coin types must be 20 bytes (were truncated or padded)
 - unknown functions are `404` and bad calldata `400` (both were `500`); non-`CCIPReadError` messages are hidden from clients
 - `handleRead(sender, calldata, config)` &rarr; `handleRequest(sender, calldata, { origin, protocol, signer, ttl, extra })`
 - `log` / `formatError` options &rarr; `log: boolean` on `serveEZCCIP` (default on) and `createFetchHandler`
-- `context.ip` / `context.url` &rarr; build them with the adapters' `extra` option
+- `serveEZCCIP` sets `ctx.extra.ip`; `context.url` is gone (use `parseOrigin` or call `handleRequest()` yourself)
 - `recursionLimit` removed &mdash; `multicall` is only allowed at the top level (see [Multicall](#multicall))
 - `History` only builds the log line: set `name` or `show` (an array, or `false`); `enter()` &rarr; `addChild()`, `then()` &rarr; `addInner()`, `next` &rarr; `inner`
 - `ENSRecord.ABI(contentTypes)` receives a `bigint`

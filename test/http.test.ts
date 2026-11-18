@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, expectTypeOf, spyOn, test } from "bun:test";
+import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import {
 	bytesToHex,
 	ccipRequest,
@@ -155,34 +155,29 @@ describe("createFetchHandler", () => {
 		await post(fetch);
 		await post(fetch, "/", { sender: SENDER, data: toFunctionSelector(fail) });
 		expect(lines[0]).toMatch(/ \/ getOrigin\(\)$/);
-		expect(lines[1]).toMatch(/ POST \/ 500 fail\(\)<secret> Error: secret/);
+		expect(lines[1]).toMatch(/ POST \/ 500 Error: secret/);
 	});
 
-	test("extra (eg. Cloudflare env)", async () => {
-		type Env = { NAME: string };
-		const ezccip = new EZCCIP<{ env: Env }>();
-		const f = ezccip.addHandler("function f() returns (string)", (_, __, { env }) => [env.NAME]);
-		const fetch = createFetchHandler(ezccip, { extra: (_request: Request, env: Env) => ({ env }) });
-		expectTypeOf(fetch).toEqualTypeOf<(request: Request, env: Env) => Promise<Response>>();
-		// @ts-expect-error extra is required
-		() => createFetchHandler(ezccip);
-		const request = new Request("http://localhost/", {
-			method: "POST",
-			body: JSON.stringify({ sender: SENDER, data: f.selector }),
-		});
-		const { data } = (await (await fetch(request, { NAME: "chonk" })).json()) as { data: Hex };
+	test("extra", async () => {
+		const ezccip = new EZCCIP();
+		const f = ezccip.addHandler("function f() returns (string)", (_, ctx) => [String(ctx.extra.NAME)]);
+		const fetch = createFetchHandler(ezccip);
+		const request = () =>
+			new Request("http://localhost/", { method: "POST", body: JSON.stringify({ sender: SENDER, data: f.selector }) });
+		const env = { NAME: "chonk" }; // eg. Cloudflare env
+		const { data } = (await (await fetch(request(), env)).json()) as { data: Hex };
 		expect(decodeFunctionResult({ abi: [f.abiFunction], data })).toBe("chonk");
+		const { data: none } = (await (await fetch(request())).json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [f.abiFunction], data: none })).toBe("undefined");
 	});
 
-	test("throwing extra is a 500, not a crash", async () => {
-		const ezccip = new EZCCIP<{ n: number }>();
-		ezccip.addHandler("function f()", () => {});
-		const fetch = createFetchHandler(ezccip, {
-			extra: () => {
-				throw new Error("bad extra");
+	test("throwing parseOrigin is a 500, not a crash", async () => {
+		const fetch = createFetchHandler(make(), {
+			parseOrigin: () => {
+				throw new Error("bad");
 			},
 		});
-		expect((await post(fetch, "/", { sender: SENDER, data: toFunctionSelector("function f()") })).status).toBe(500);
+		expect((await post(fetch)).status).toBe(500);
 	});
 });
 

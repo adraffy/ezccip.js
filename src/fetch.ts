@@ -1,41 +1,55 @@
+import { errorStatus, publicErrorMessage } from "./errors.js";
 import type { EZCCIP } from "./ezccip.js";
-import { answer, CORS_HEADERS, type HTTPOptions, logAnswer, PREFLIGHT_HEADERS, parseCCIPReadRequest } from "./http.js";
+import {
+	CORS_HEADERS,
+	describeError,
+	type HTTPOptions,
+	originFromPath,
+	PREFLIGHT_HEADERS,
+	parseCCIPReadRequest,
+} from "./http.js";
 
-export type FetchHandlerOptions<extra = undefined, args extends unknown[] = []> = HTTPOptions &
-	(undefined extends extra
-		? { extra?: ((request: Request, ...args: args) => extra) | undefined }
-		: { extra: (request: Request, ...args: args) => extra });
+export type FetchHandlerOptions = HTTPOptions;
 
 /**
- * Creates a `fetch(request) => response` handler for Bun, Deno, Cloudflare Workers, Hono, etc.
+ * Creates a `fetch(request, extra?) => response` handler for Bun, Deno, Cloudflare Workers, Hono, etc.
  * Answers `POST {sender, data}` and `GET .../{sender}/{data}.json` with `{data}`,
  * or `{message}` and an HTTP status.
  *
+ * The fields of `extra` are copied into `ctx.extra`: pass your own, or let the runtime pass its
+ * second argument, eg. Cloudflare's `env`.
+ *
  * @example
  * ```ts
- * export default { fetch: createFetchHandler(ezccip) };
+ * export default { fetch: createFetchHandler(ezccip) }; // Cloudflare: ctx.extra is env
  *
- * // Cloudflare Workers: pass env to handlers
- * const ezccip = new EZCCIP<{ env: Env }>();
- * export default { fetch: createFetchHandler(ezccip, { extra: (request, env: Env) => ({ env }) }) };
+ * const handler = createFetchHandler(ezccip);
+ * Bun.serve({ fetch: (request, server) => handler(request, { ip: server.requestIP(request)?.address }) });
  * ```
  */
-export function createFetchHandler<extra = undefined, args extends unknown[] = []>(
-	ezccip: EZCCIP<extra>,
-	...[options]: undefined extends extra
-		? [options?: FetchHandlerOptions<extra, args>]
-		: [options: FetchHandlerOptions<extra, args>]
-): (request: Request, ...args: args) => Promise<Response> {
-	const { cors = true, log = false } = options ?? {};
+export function createFetchHandler(
+	ezccip: EZCCIP,
+	{ cors = true, log = false, parseOrigin = (url) => originFromPath(url.pathname) }: FetchHandlerOptions = {},
+): (request: Request, extra?: object) => Promise<Response> {
 	const headers = cors ? CORS_HEADERS : undefined;
-	return async (request, ...args) => {
+	return async (request, extra) => {
 		if (request.method === "OPTIONS" && cors) {
 			return new Response(null, { status: 204, headers: PREFLIGHT_HEADERS });
 		}
 		const url = new URL(request.url);
-		const getExtra = options?.extra && (() => options.extra!(request, ...args) as extra);
-		const result = await answer(ezccip, url, () => parseCCIPReadRequest(request), options ?? {}, getExtra);
-		if (log) logAnswer(request.headers.get("x-forwarded-for"), request.method, url, result);
-		return Response.json(result.body, { status: result.status, headers });
+		const ip = request.headers.get("x-forwarded-for");
+		try {
+			const { sender, data: calldata } = await parseCCIPReadRequest(request);
+			const { data, history } = await ezccip.handleRequest(sender, calldata, {
+				origin: parseOrigin(url),
+				extra: { ...extra },
+			});
+			if (log) console.log(new Date(), ip, url.pathname, String(history));
+			return Response.json({ data }, { headers });
+		} catch (error) {
+			const status = errorStatus(error);
+			if (log) console.log(new Date(), ip, request.method, url.pathname, status, describeError(error));
+			return Response.json({ message: publicErrorMessage(error) }, { status, headers });
+		}
 	};
 }

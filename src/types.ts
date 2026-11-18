@@ -1,6 +1,7 @@
 import type { AbiParametersToPrimitiveTypes } from "abitype";
 import type { AbiFunction, Hex } from "viem";
-import type { CallContext } from "./context.js";
+import type { ReadContext } from "./context.js";
+import type { History } from "./history.js";
 import type { Protocol, SignerLike } from "./signing.js";
 
 export type Awaitable<T> = T | PromiseLike<T>;
@@ -17,29 +18,26 @@ export type HandlerResult<abiFunction extends AbiFunction = AbiFunction> =
 	| (abiFunction["outputs"] extends readonly [] ? void : never);
 
 /**
- * Implementation of an offchain function: `(args, ctx, extra) => result`.
+ * Implementation of an offchain function: `(args, ctx, history) => result`.
  *
  * @param args - Decoded arguments.
- * @param ctx - This call's context.
- * @param extra - Custom object passed with the request, eg. `{ env }` on Cloudflare.
+ * @param ctx - The request, shared by every call in it. Handlers may change how the response is signed.
+ * @param history - Log entry for this call: rename it or replace the shown arguments.
  */
-export type HandlerFunction<abiFunction extends AbiFunction = AbiFunction, extra = undefined> = (
+export type HandlerFunction<abiFunction extends AbiFunction = AbiFunction> = (
 	args: AbiParametersToPrimitiveTypes<abiFunction["inputs"]>,
-	ctx: CallContext,
-	extra: extra,
+	ctx: ReadContext,
+	history: History,
 ) => Awaitable<HandlerResult<abiFunction>>;
 
 /** A function added with `addHandler()`. */
-export type Handler<abiFunction extends AbiFunction = AbiFunction, extra = undefined> = {
+export type Handler<abiFunction extends AbiFunction = AbiFunction> = {
 	readonly abiFunction: abiFunction;
 	readonly selector: Hex;
 	/** eg. `"f(uint256,(bool,string)[])"` */
 	readonly signature: string;
-	readonly fn: HandlerFunction<abiFunction, extra>;
+	readonly fn: HandlerFunction<abiFunction>;
 };
-
-/** `extra` is optional when it may be `undefined`, otherwise required. */
-export type ExtraParameter<extra> = undefined extends extra ? { extra?: extra } : { extra: extra };
 
 /** How a response is signed. Defaults on `EZCCIP`, per request in `handleRequest()`, or set by handlers on `ctx`. */
 export type ResponseOptions = {

@@ -19,10 +19,17 @@ import {
 	parseAbiParameters,
 	toFunctionSelector,
 } from "viem";
-import { generatePrivateKey } from "viem/accounts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { packetToBytes } from "viem/ens";
 import { MULTICALL, RESOLVE, UNREACHABLE_NAME } from "../src/ens/abi.js";
-import { type CallContext, CCIPReadError, EZCCIP, type HandlerFunction } from "../src/index.js";
+import {
+	CCIPReadError,
+	EZCCIP,
+	type HandlerFunction,
+	type History,
+	type ReadContext,
+	verifyResponse,
+} from "../src/index.js";
 
 const sender = getAddress("0x0000000000000000000000000000000000000001");
 const SOLIDITY_ERROR = parseAbiItem("error Error(string)");
@@ -40,14 +47,18 @@ async function call(ezccip: EZCCIP, abiFunction: AbiFunction, args: readonly unk
 describe("addHandler", () => {
 	test("signature", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("function plus(uint256 a, uint256 b) returns (uint256 c)", (args, ctx, extra) => {
-			expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
-			expectTypeOf(ctx).toEqualTypeOf<CallContext>();
-			expectTypeOf(extra).toEqualTypeOf<undefined>();
-			expectTypeOf(ctx.sender).toEqualTypeOf<Address>();
-			const [a, b] = args;
-			return [a + b];
-		});
+		const handler = ezccip.addHandler(
+			"function plus(uint256 a, uint256 b) returns (uint256 c)",
+			(args, ctx, history) => {
+				expectTypeOf(args).toEqualTypeOf<readonly [bigint, bigint]>();
+				expectTypeOf(ctx).toEqualTypeOf<ReadContext>();
+				expectTypeOf(history).toEqualTypeOf<History>();
+				expectTypeOf(ctx.extra).toEqualTypeOf<Record<string, unknown>>();
+				expectTypeOf(ctx.sender).toEqualTypeOf<Address>();
+				const [a, b] = args;
+				return [a + b];
+			},
+		);
 		expect(handler.signature).toBe("plus(uint256,uint256)");
 		expect(handler.selector).toBe(toFunctionSelector("function plus(uint256,uint256)"));
 		expect(await call(ezccip, handler.abiFunction, [1n, 2n])).toEqual([3n]);
@@ -170,7 +181,7 @@ describe("handleRead", () => {
 		ezccip.addHandler(fn, (_, ctx) => {
 			expect(ctx.calldata).toBe(encode(fn));
 			expect(ctx.ttl).toBe(5);
-			expect(ctx.protocol).toBe("raw");
+			expect(ctx.protocol).toBeUndefined(); // "raw" without a signer
 			expect(ctx.signer).toBeUndefined();
 			return [ctx.sender, ctx.origin];
 		});
@@ -181,10 +192,10 @@ describe("handleRead", () => {
 	});
 
 	test("extra reaches multicall subcalls and resolve()", async () => {
-		const ezccip = new EZCCIP<{ suffix: string }>();
+		const ezccip = new EZCCIP();
 		const text = parseAbiItem("function text(bytes32, string) returns (string)");
-		const f = ezccip.addHandler("function f() returns (string)", (_, __, extra) => [`f${extra.suffix}`]);
-		ezccip.enableENSIP10({ resolve: (name, _, extra) => ({ text: () => `${name}${extra.suffix}` }) });
+		const f = ezccip.addHandler("function f() returns (string)", (_, ctx) => [`f${ctx.extra.suffix}`]);
+		ezccip.enableENSIP10({ resolve: (name, ctx) => ({ text: () => `${name}${ctx.extra.suffix}` }) });
 		const resolve = encode(RESOLVE, [bytesToHex(packetToBytes("a.eth")), encode(text, [pad("0x"), "k"])]);
 		const { data } = await ezccip.handleRequest(sender, encode(MULTICALL, [[f.selector, resolve]]), {
 			extra: { suffix: "!" },
@@ -195,12 +206,17 @@ describe("handleRead", () => {
 	});
 
 	test("extra", async () => {
-		const ezccip = new EZCCIP<{ env: { greeting: string } }>();
-		const handler = ezccip.addHandler("f() returns (string)", (_, __, extra) => [extra.env.greeting]);
-		// @ts-expect-error extra is required
-		() => ezccip.handleRequest(sender, handler.selector);
-		const { data } = await ezccip.handleRequest(sender, handler.selector, { extra: { env: { greeting: "hello" } } });
-		expect(decodeFunctionResult({ abi: [handler.abiFunction], data })).toBe("hello");
+		const ezccip = new EZCCIP();
+		const handler = ezccip.addHandler("f() returns (string)", (_, ctx) => {
+			ctx.extra.seen = true;
+			return [String(ctx.extra.greeting)];
+		});
+		const extra = { greeting: "hello" };
+		const res = await ezccip.handleRequest(sender, handler.selector, { extra });
+		expect(decodeFunctionResult({ abi: [handler.abiFunction], data: res.data })).toBe("hello");
+		expect(res.context.extra).toBe(extra);
+		expect(extra).toEqual({ greeting: "hello", seen: true } as never);
+		expect((await ezccip.handleRequest(sender, handler.selector)).context.extra).toEqual({ seen: true });
 	});
 
 	test("origin defaults to sender", async () => {
@@ -236,13 +252,31 @@ describe("handleRead", () => {
 
 	test("protocol is chosen after handlers run", async () => {
 		const ezccip = new EZCCIP();
+		const signer = generatePrivateKey();
 		const handler = ezccip.addHandler("function f()", (_, ctx) => {
-			expect(ctx.protocol).toBe("raw");
-			ctx.signer = generatePrivateKey();
-			expect(ctx.protocol).toBe("ens");
+			expect(ctx.protocol).toBeUndefined();
+			ctx.signer = signer;
 		});
-		const { context } = await ezccip.handleRequest(sender, handler.selector);
-		expect(context.protocol).toBe("ens");
+		const { data, context } = await ezccip.handleRequest(sender, handler.selector);
+		expect(context.protocol).toBeUndefined();
+		const verified = await verifyResponse({
+			protocol: "ens",
+			response: data,
+			calldata: handler.selector,
+			origin: sender,
+		});
+		expect(verified.signer).toBe(privateKeyToAccount(signer).address);
+	});
+
+	test("signs the request calldata, not ctx.calldata", async () => {
+		const ezccip = new EZCCIP({ signer: generatePrivateKey() });
+		const handler = ezccip.addHandler("function f()", (_, ctx) => {
+			(ctx as { calldata: Hex }).calldata = "0x12345678";
+		});
+		const { data } = await ezccip.handleRequest(sender, handler.selector);
+		expect(
+			verifyResponse({ protocol: "ens", response: data, calldata: handler.selector, origin: sender }),
+		).resolves.toBeDefined();
 	});
 
 	test("invalid input", async () => {
@@ -257,13 +291,13 @@ describe("handleRead", () => {
 
 	test("history", async () => {
 		const ezccip = new EZCCIP();
-		const handler = ezccip.addHandler("f(string s, uint256 x) returns (uint256)", (_, ctx) => {
-			ctx.history.show = ["custom"];
-			ctx.history.name = "Chonk";
+		const handler = ezccip.addHandler("f(string s, uint256 x) returns (uint256)", (_, __, history) => {
+			history.show = ["custom"];
+			history.name = "Chonk";
 			return [0n];
 		});
-		const { context } = await ezccip.handleRequest(sender, encode(handler.abiFunction, ["a", 1n]));
-		expect(String(context.history)).toBe("Chonk(custom)");
+		const { history } = await ezccip.handleRequest(sender, encode(handler.abiFunction, ["a", 1n]));
+		expect(String(history)).toBe("Chonk(custom)");
 	});
 });
 
@@ -287,7 +321,7 @@ describe("multicall", () => {
 		const [a, b] = results(res.data);
 		expect(decodeFunctionResult({ abi: [f], data: a! })).toBe(2n);
 		expect(errorMessage(b!)).toBe("nope");
-		expect(String(res.context.history)).toBe("multicall()^2 [f(1) fail()<nope>]");
+		expect(String(res.history)).toBe("multicall()^2 [f(1) fail()<nope>]");
 	});
 
 	test("subcalls share context", async () => {
@@ -316,7 +350,7 @@ describe("multicall", () => {
 		const [a, b] = results(answer!);
 		expect(decodeFunctionResult({ abi: [text], data: a! })).toBe("raffy.eth:a");
 		expect(decodeFunctionResult({ abi: [text], data: b! })).toBe("raffy.eth:b");
-		expect(String(res.context.history)).toBe("multicall()^1 [resolve(raffy.eth).multicall()^2 [text(a) text(b)]]");
+		expect(String(res.history)).toBe("multicall()^1 [resolve(raffy.eth).multicall()^2 [text(a) text(b)]]");
 	});
 });
 
@@ -340,15 +374,15 @@ describe("enableENSIP10", () => {
 	test("resolve", async () => {
 		const ezccip = new EZCCIP();
 		ezccip.enableENSIP10({
-			resolve(name, ctx, extra) {
-				expectTypeOf(ctx).toEqualTypeOf<CallContext>();
-				expectTypeOf(extra).toEqualTypeOf<undefined>();
+			resolve(name, ctx, history) {
+				expectTypeOf(ctx).toEqualTypeOf<ReadContext>();
+				expectTypeOf(history).toEqualTypeOf<History>();
 				return { text: (key) => `${name}:${key}` };
 			},
 		});
 		const res = await ezccip.handleRequest(sender, resolve(bytesToHex(packetToBytes("raffy.eth"))));
 		expect(decodeFunctionResult({ abi: [text], data: res.data })).toBe("raffy.eth:name");
-		expect(String(res.context.history)).toBe("resolve(raffy.eth).text(name)");
+		expect(String(res.history)).toBe("resolve(raffy.eth).text(name)");
 	});
 
 	test("unreachable (default)", async () => {

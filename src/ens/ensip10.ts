@@ -9,7 +9,7 @@ import {
 	toFunctionSelector,
 	zeroAddress,
 } from "viem";
-import type { CallContext } from "../context.js";
+import type { ReadContext } from "../context.js";
 import { CCIPReadError, encodeErrorString } from "../errors.js";
 import type { History } from "../history.js";
 import type { Awaitable, BytesLike, HandlerFunction } from "../types.js";
@@ -206,36 +206,36 @@ function formatContentTypes(contentTypes: bigint) {
 }
 
 /** Looks up the record for a name. Return nothing if the name does not exist. */
-export type GetRecord<extra = undefined> = (name: string, ctx: CallContext, extra: extra) => Maybe<ENSRecord>;
+export type GetRecord = (name: string, ctx: ReadContext, history: History) => Maybe<ENSRecord>;
 
 export type ENSIP10Options = Omit<ProcessENSIP10Options, "history"> & {
 	/** Answer unknown names with empty records instead of `UnreachableName`. (default: false) */
 	unreachableAsEmpty?: boolean;
 };
 
-export type ENSIP10Parameters<extra = undefined> = ENSIP10Options & {
+export type ENSIP10Parameters = ENSIP10Options & {
 	/** Looks up the record for a name. */
-	resolve: GetRecord<extra>;
+	resolve: GetRecord;
 };
 
 /**
  * Creates a handler for [ENSIP-10](https://docs.ens.domains/ensip/10) `resolve(bytes name, bytes data)`.
  * Note: the name is not normalized.
  */
-export function createENSIP10Handler<extra = undefined>({
+export function createENSIP10Handler({
 	resolve,
 	unreachableAsEmpty,
 	...options
-}: ENSIP10Parameters<extra>): HandlerFunction<typeof RESOLVE, extra> {
-	return async ([dnsname, data], ctx, extra) => {
+}: ENSIP10Parameters): HandlerFunction<typeof RESOLVE> {
+	return async ([dnsname, data], ctx, history) => {
 		const name = dnsDecodeName(dnsname);
-		ctx.history.show = [name];
-		const record = await resolve(name, ctx, extra);
+		history.show = [name];
+		const record = await resolve(name, ctx, history);
 		if (!record && !unreachableAsEmpty) {
-			ctx.history.error = "UnreachableName";
+			history.error = "UnreachableName";
 			return encodeErrorResult({ abi: [UNREACHABLE_NAME], args: [dnsname] });
 		}
 		// already encoded since: abi.decode(abi.encode(x)) == x
-		return processENSIP10(record, data, { ...options, history: ctx.history.addInner(data) });
+		return processENSIP10(record, data, { ...options, history: history.addInner(data) });
 	};
 }

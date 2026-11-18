@@ -3,9 +3,7 @@
  * @module
  */
 import { type Address, getAddress, type Hex } from "viem";
-import type { CallContext } from "./context.js";
-import { CCIPReadError, publicErrorMessage } from "./errors.js";
-import { type EZCCIP, errorContext, type HandleRequestOptions } from "./ezccip.js";
+import { CCIPReadError } from "./errors.js";
 
 /** An [EIP-3668](https://eips.ethereum.org/EIPS/eip-3668) request. */
 export type CCIPReadRequest = { sender: Hex; data: Hex };
@@ -70,47 +68,7 @@ export function originFromPath(path: string): Address | undefined {
 	return match ? getAddress(match[1]!) : undefined;
 }
 
-/** @internal An HTTP answer: status and JSON body, plus what happened, for logging. */
-export type HTTPAnswer = {
-	status: number;
-	body: { data: Hex } | { message: string };
-	context: CallContext | undefined;
-	error?: unknown;
-};
-
-/** @internal Parses a request, answers it, and turns the result or error into an HTTP answer. */
-export async function answer<extra>(
-	ezccip: EZCCIP<extra>,
-	url: URL,
-	parse: () => Promise<CCIPReadRequest>,
-	{ parseOrigin = (url) => originFromPath(url.pathname) }: HTTPOptions,
-	getExtra: (() => extra) | undefined,
-): Promise<HTTPAnswer> {
-	try {
-		const { sender, data } = await parse();
-		const options = { origin: parseOrigin(url), extra: getExtra?.() } as HandleRequestOptions<extra>;
-		const { data: response, context } = await ezccip.handleRequest(sender, data, options as never);
-		return { status: 200, body: { data: response }, context };
-	} catch (error) {
-		const status = error instanceof CCIPReadError ? error.status : 500;
-		return { status, body: { message: publicErrorMessage(error) }, context: errorContext(error), error };
-	}
-}
-
-/** @internal Logs an answer: `ip path history` or `ip method path status history error`. */
-export function logAnswer(ip: unknown, method: string | undefined, url: URL, { status, context, error }: HTTPAnswer) {
-	if (status === 200) {
-		console.log(new Date(), ip, url.pathname, String(context?.history));
-	} else {
-		console.log(
-			new Date(),
-			ip,
-			method,
-			url.pathname,
-			status,
-			...(context ? [String(context.history)] : []),
-			// stack trace for unexpected errors
-			status >= 500 && !(error instanceof CCIPReadError) ? error : error instanceof Error ? error.message : error,
-		);
-	}
+/** @internal What to log for an error: the stack trace if unexpected, otherwise the message. */
+export function describeError(error: unknown): unknown {
+	return error instanceof CCIPReadError ? error.message : error;
 }

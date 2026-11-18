@@ -44,7 +44,7 @@ describe("serveEZCCIP", () => {
 		expect(lines).toHaveLength(4);
 		expect(lines[0]).toBe(`Serving "raw" ${ccip.endpoint}`);
 		expect(lines[1]).toMatch(/ \/ f\(1\)$/);
-		expect(lines[2]).toMatch(/ POST \/ 500 fail\(\)<chonk> Error: chonk/);
+		expect(lines[2]).toMatch(/ POST \/ 500 Error: chonk/);
 		expect(lines[3]).toMatch(/^Shutdown<\d+ms>$/);
 	});
 
@@ -77,22 +77,20 @@ describe("serveEZCCIP", () => {
 		expect(await originOf(`/${ORIGIN}`)).toBe(SENDER); // replaces the path heuristic
 	});
 
-	test("extra from the node request", async () => {
-		const ezccip = new EZCCIP<{ ip: string | undefined; agent: string | undefined }>();
-		const who = ezccip.addHandler("function who() returns (string)", (_, __, { ip, agent }) => [`${ip} ${agent}`]);
-		// @ts-expect-error extra is required
-		() => serveEZCCIP(ezccip);
-		await using ccip = await serveEZCCIP(ezccip, {
-			log: false,
-			extra: (req) => ({ ip: req.socket.remoteAddress, agent: req.headers["user-agent"] }),
-		});
-		const res = await fetch(ccip.endpoint, {
+	test("extra: ip and custom values", async () => {
+		const ezccip = new EZCCIP();
+		const who = ezccip.addHandler("function who() returns (string)", (_, ctx) => [`${ctx.extra.ip} ${ctx.extra.name}`]);
+		await using ccip = await serveEZCCIP(ezccip, { log: false, extra: { name: "chonk" } });
+		const res = await post(ccip.endpoint, who.selector);
+		const { data } = (await res.json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [who.abiFunction], data })).toMatch(/^\S+ chonk$/);
+		const forwarded = await fetch(ccip.endpoint, {
 			method: "POST",
-			headers: { "user-agent": "chonk" },
+			headers: { "x-forwarded-for": "1.2.3.4" },
 			body: JSON.stringify({ sender: SENDER, data: who.selector }),
 		});
-		const { data } = (await res.json()) as { data: Hex };
-		expect(decodeFunctionResult({ abi: [who.abiFunction], data })).toMatch(/ chonk$/);
+		const { data: data2 } = (await forwarded.json()) as { data: Hex };
+		expect(decodeFunctionResult({ abi: [who.abiFunction], data: data2 })).toBe("1.2.3.4 chonk");
 	});
 
 	test("errors", async () => {

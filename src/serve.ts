@@ -7,14 +7,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { generatePrivateKey } from "viem/accounts";
 import type { GetRecord } from "./ens/ensip10.js";
-import { CCIPReadError } from "./errors.js";
+import { CCIPReadError, errorStatus, publicErrorMessage } from "./errors.js";
 import { EZCCIP, type EZCCIPOptions } from "./ezccip.js";
 import {
-	answer,
 	type CCIPReadRequest,
 	CORS_HEADERS,
+	describeError,
 	type HTTPOptions,
-	logAnswer,
+	originFromPath,
 	PREFLIGHT_HEADERS,
 	parseCCIPReadBody,
 	parseCCIPReadPath,
@@ -23,19 +23,19 @@ import {
 /** Largest request body accepted, in bytes. */
 const MAX_BODY_SIZE = 1 << 20;
 
-export type ServeOptions<extra = undefined> = HTTPOptions & {
+export type ServeOptions = HTTPOptions & {
 	/** Port to listen on. (default: random open port) */
 	port?: number;
 	/** Interface to listen on. (default: all) */
 	hostname?: string;
 	/** Log startup, every response, every error, and shutdown with `console.log`, prefixed by the date. (default: true) */
 	log?: boolean;
-} & (undefined extends extra
-		? { extra?: ((req: IncomingMessage) => extra) | undefined }
-		: { extra: (req: IncomingMessage) => extra });
+	/** Custom values for handlers, copied into `ctx.extra` of every request, along with the client's `ip`. */
+	extra?: Record<string, unknown>;
+};
 
-export type EZCCIPServer<extra = undefined> = {
-	readonly ezccip: EZCCIP<extra>;
+export type EZCCIPServer = {
+	readonly ezccip: EZCCIP;
 	readonly server: Server;
 	readonly port: number;
 	/** eg. `http://localhost:8016` */
@@ -67,39 +67,51 @@ export type EZCCIPServer<extra = undefined> = {
  * // minimal: fixed text() for any name
  * await using ccip = await serveEZCCIP(() => ({ text: () => "Raffy" }));
  *
- * // give handlers the client's IP
- * const ezccip = new EZCCIP<{ ip?: string }>();
- * await serveEZCCIP(ezccip, { extra: (req) => ({ ip: req.socket.remoteAddress }) });
+ * // handlers see the client's IP as ctx.extra.ip
+ * ezccip.addHandler("function ip() returns (string)", (_, ctx) => [String(ctx.extra.ip)]);
  * ```
  */
-export function serveEZCCIP<extra = undefined>(
-	ezccip: EZCCIP<extra>,
-	...[options]: undefined extends extra ? [options?: ServeOptions<extra>] : [options: ServeOptions<extra>]
-): Promise<EZCCIPServer<extra>>;
+export function serveEZCCIP(ezccip: EZCCIP, options?: ServeOptions): Promise<EZCCIPServer>;
 export function serveEZCCIP(resolve: GetRecord, options?: ServeOptions & EZCCIPOptions): Promise<EZCCIPServer>;
 export async function serveEZCCIP(
-	arg: EZCCIP<any> | GetRecord,
-	options: ServeOptions<any> & EZCCIPOptions = {},
-): Promise<EZCCIPServer<any>> {
+	arg: EZCCIP | GetRecord,
+	options: ServeOptions & EZCCIPOptions = {},
+): Promise<EZCCIPServer> {
 	const ezccip =
 		arg instanceof EZCCIP
 			? arg
 			: new EZCCIP({ ...options, signer: options.signer ?? generatePrivateKey() }).enableENSIP10({ resolve: arg });
-	const { port = 0, hostname, log = true, cors = true } = options;
+	const {
+		port = 0,
+		hostname,
+		log = true,
+		cors = true,
+		parseOrigin = (url) => originFromPath(url.pathname),
+		extra,
+	} = options;
 	const print = log ? (...a: unknown[]) => console.log(new Date(), ...a) : undefined;
 	const headers = cors ? CORS_HEADERS : {};
 
 	const server = createServer(async (req, res) => {
-		const url = new URL(req.url ?? "/", "http://localhost");
 		if (req.method === "OPTIONS" && cors) {
 			res.writeHead(204, PREFLIGHT_HEADERS).end();
 			return;
 		}
-		const { extra } = options;
-		const getExtra = extra && (() => extra(req));
-		const result = await answer(ezccip, url, () => readRequest(req, url), options, getExtra);
-		if (log) logAnswer(req.headers["x-forwarded-for"] ?? req.socket.remoteAddress, req.method, url, result);
-		sendJSON(res, result.status, result.body, headers);
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const ip = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress;
+		try {
+			const { sender, data: calldata } = await readRequest(req, url);
+			const { data, history } = await ezccip.handleRequest(sender, calldata, {
+				origin: parseOrigin(url),
+				extra: { ...extra, ip },
+			});
+			print?.(ip, url.pathname, String(history));
+			sendJSON(res, 200, { data }, headers);
+		} catch (error) {
+			const status = errorStatus(error);
+			print?.(ip, req.method, url.pathname, status, describeError(error));
+			sendJSON(res, status, { message: publicErrorMessage(error) }, headers);
+		}
 	});
 	await new Promise<void>((resolve, reject) => {
 		server.once("error", reject);

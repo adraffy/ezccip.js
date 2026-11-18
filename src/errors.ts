@@ -19,6 +19,11 @@ export function publicErrorMessage(error: unknown): string {
 	return error instanceof CCIPReadError ? error.message : "internal error";
 }
 
+/** HTTP status for an error: a {@link CCIPReadError}'s status, otherwise 500. */
+export function errorStatus(error: unknown): number {
+	return error instanceof CCIPReadError ? error.status : 500;
+}
+
 const SOLIDITY_ERROR = parseAbiItem("error Error(string)");
 
 /** Encodes revert data `Error(string)`. Errors are encoded with {@link publicErrorMessage}. */
