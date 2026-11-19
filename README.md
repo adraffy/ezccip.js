@@ -30,9 +30,9 @@ import { serveEZCCIP } from "@adraffy/ezccip/serve";
 import { getAbiItem } from "viem";
 
 const ezccip = new EZCCIP({
-	signer: privateKey, // Hex private key or viem LocalAccount
-	// protocol: "tor", // default: "ens" with a signer, otherwise "raw"
-	// ttl: 60, // response lifetime in seconds
+    signer: privateKey, // Hex private key or viem LocalAccount
+    // protocol: "tor", // default: "ens" with a signer, otherwise "raw"
+    // ttl: 60, // response lifetime in seconds
 });
 
 // implement an arbitrary function
@@ -41,10 +41,10 @@ ezccip.addFunctionHandler("function plus(uint256 a, uint256 b) returns (uint256)
 
 // or from an existing ABI
 ezccip.addFunctionHandler(getAbiItem({ abi, name: "f" }), async ([x], ctx, history) => {
-	history.show = [ctx.sender]; // replace arguments of f(...) in logger
-	history.name = "Chonk"; // rename f() to Chonk() in logger
-	ctx.protocol = "raw"; // override signing protocol for this request
-	return "0x..."; // return already-encoded bytes
+    history.show = [ctx.sender]; // replace arguments of f(...) in logger
+    history.name = "Chonk"; // rename f() to Chonk() in logger
+    ctx.protocol = "raw"; // override signing protocol for this request
+    return "0x..."; // return already-encoded bytes
 });
 
 // or by name from an ABI: human-readable (which can declare structs) or JSON
@@ -55,20 +55,20 @@ ezccip.addAbiHandler(abi, "flip", ([{ x, y }]) => [{ x: y, y: x }]);
 // implement a wildcard ENSIP-10 resolver
 // which handles resolve() automatically
 ezccip.enableENSIP10({
-	async resolve(name, ctx) {
-		// return nothing (undefined or null) if the name doesn't exist: reverts UnreachableName
-		// return {} if the name exists without records: every profile answers empty
-		return {
-			text(key) {
-				switch (key) {
-					case "name":
-						return "Raffy";
-					case "avatar":
-						return "https://raffy.antistupid.com/ens.jpg";
-				}
-			},
-		};
-	},
+    async resolve(name, ctx) {
+        // return nothing (undefined or null) if the name doesn't exist: reverts UnreachableName
+        // return {} if the name exists without records: every profile answers empty
+        return {
+            text(key) {
+                switch (key) {
+                    case "name":
+                        return "Raffy";
+                    case "avatar":
+                        return "https://raffy.antistupid.com/ens.jpg";
+                }
+            },
+        };
+    },
 });
 
 // signer and protocol can change later (the protocol isn't changed by setting a signer)
@@ -210,8 +210,8 @@ Answers ENSIP-10 `calldata` from a record object and returns the ABI-encoded res
 
 ```ts
 const record = {
-	text(key) { if (key === "name") return "raffy"; },
-	addr(coinType) { if (coinType === 60n) return "0x51050ec063d393217b436747617ad1c2285aeeee"; },
+    text(key) { if (key === "name") return "raffy"; },
+    addr(coinType) { if (coinType === 60n) return "0x51050ec063d393217b436747617ad1c2285aeeee"; },
 };
 const res = await processENSIP10(record, calldata); // (record, calldata, options?, history?)
 ```

@@ -25,6 +25,7 @@ Before finishing a change, run `bun run check && bun run lint && bun test`. If y
 - **TypeScript 7** (`tsc` is the native compiler), `strict` + `noUncheckedIndexedAccess`.
 - **ESM-only**. No CommonJS build.
 - **Biome** for formatting and lint: tabs, double quotes, 120 columns. Do not hand-format; run `bun run format`.
+- **Markdown** isn't formatted by Biome. Indent code blocks in `README.md` with 4 spaces, not tabs: GitHub and npm render tabs 8 wide.
 
 ## Layout
 
