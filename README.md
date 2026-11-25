@@ -5,8 +5,6 @@
 
 Turnkey [EIP-3668: CCIP-Read](https://eips.ethereum.org/EIPS/eip-3668) handler for ENS and arbitrary functions.
 
-`bun add @adraffy/ezccip viem` / `npm i @adraffy/ezccip viem` (Node 20+)
-
 - TypeScript, ESM-only, built on [viem](https://viem.sh) (peer dependency)
 - handler arguments and return values are typed from the ABI
 - runtime-agnostic core: `handleRequest(sender, calldata)`, plus HTTP adapters for `fetch` runtimes (Bun, Deno, Cloudflare Workers, Hono) and `node:http`
